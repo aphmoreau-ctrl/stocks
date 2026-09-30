@@ -1,4 +1,4 @@
-# Stocks, version 1.0.0
+# Stocks, version 1.0.1
 
 Application de justesse des stocks et de suivi de la démarque des rayons frais.
 
@@ -7,7 +7,7 @@ Application de justesse des stocks et de suivi de la démarque des rayons frais.
 - Scan des codes-barres (EAN, UPC, Code 128) avec la caméra de l'iPhone ou de l'iPad, et décodage des étiquettes à poids ou prix variable des balances (réglable).
 - Recherche par nom ou code PLU pour le vrac sans code-barres, et accès rapide aux produits les plus démarqués.
 - Fiches produits créées au premier scan, avec tous les champs prévus pour les versions suivantes (unités, conversions, prix, rendement, tolérance, paramètres de commande, niveau de suivi 0 à 5).
-- Saisie de la démarque connue par motif, des dons, des retours fournisseurs et des remises (hors démarque, avec manque à gagner et taux d'écoulement ; un produit remisé puis jeté passe en démarque, rattaché à sa remise).
+- Saisie de la démarque connue par motif, des dons et des retours fournisseurs. Seule la marchandise sortie sans être vendue est enregistrée : les remises n'ont pas leur place ici.
 - Journal complet : rien n'est jamais effacé, une annulation ajoute une ligne.
 - Tableau de bord par période, rayon, motif et produit ; montants masquables.
 - Rayons et motifs paramétrables, export JSON et CSV, import.

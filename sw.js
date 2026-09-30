@@ -1,5 +1,5 @@
 // Stocks : service worker (fonctionnement hors connexion de l'application)
-const CACHE = 'stocks-1.0.0';
+const CACHE = 'stocks-1.0.1';
 const COQUILLE = ['./', './index.html', './manifest.json', './firebase-config.js',
   './icons/icon-180.png', './icons/icon-192.png', './icons/icon-512.png'];
 const EXTERNES = ['www.gstatic.com', 'cdn.jsdelivr.net', 'fonts.googleapis.com', 'fonts.gstatic.com'];

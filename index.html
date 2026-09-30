@@ -77,7 +77,7 @@ nav.tabs .scan{background:var(--accent);color:var(--accent-ink)!important;border
 
 /* Étiquettes de mouvement (forme d'étiquette de gondole) */
 .tag{display:inline-flex;align-items:center;font:600 14px/1 var(--cond);letter-spacing:.02em;padding:5px 9px 5px 13px;color:#fff;background:var(--neutral);clip-path:polygon(7px 0,100% 0,100% 100%,7px 100%,0 50%);border-radius:0 4px 4px 0;white-space:nowrap}
-.t-demarque{background:var(--dem)} .t-remise{background:var(--rem);color:#2A1D00} .t-don{background:var(--don)} .t-retour{background:var(--ret)}
+.t-demarque{background:var(--dem)} .t-don{background:var(--don)} .t-retour{background:var(--ret)}
 .t-reception,.t-transfo_entree,.t-cession_entree{background:var(--ok)} .t-annulation{background:var(--neutral)}
 
 /* Niveaux */
@@ -174,19 +174,18 @@ textarea{min-height:70px;resize:vertical}
 /* ============================================================
    CONSTANTES ET MODÈLE DE DONNÉES (prévu pour toutes les versions)
    ============================================================ */
-const VERSION = '1.0.0';
+const VERSION = '1.0.1';
 const CFG = window.STOCKS_CONFIG || {};
 const MAG = CFG.magasinId || 'la-vaugine';
 const LOCAL = !CFG.firebase;
 const LIB_SCAN = 'https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js';
 
 // Types de mouvements. sens : effet sur le stock (+1 entrée, -1 sortie, 0 sans effet).
-// V1 : demarque, don, retour, remise, annulation. Les autres sont prévus pour les versions suivantes.
+// V1 : demarque, don, retour, annulation. Les autres sont prévus pour les versions suivantes.
 const TYPES = {
   demarque:       {nom:'Démarque',            sens:-1, v:1},
   don:            {nom:'Don',                 sens:-1, v:1},
   retour:         {nom:'Retour fournisseur',  sens:-1, v:1},
-  remise:         {nom:'Remise',              sens: 0, v:1},
   annulation:     {nom:'Annulation',          sens: 0, v:1},
   reception:      {nom:'Réception',           sens: 1, v:3},
   vente:          {nom:'Vente',               sens:-1, v:2},
@@ -197,7 +196,7 @@ const TYPES = {
   cession_sortie: {nom:'Cession vers un rayon', sens:-1, v:5},
   cession_entree: {nom:'Cession depuis un rayon', sens:1, v:5}
 };
-const ACTIONS_V1 = ['demarque','don','remise','retour'];
+const ACTIONS_V1 = ['demarque','don','retour'];
 
 const NIVEAUX = [
   {n:0, nom:'Non suivie',       desc:'Produit repéré, pas encore suivi.'},
@@ -226,7 +225,6 @@ const DEF_PARAMS = {
     {id:'autre',   nom:'Autre',                     actif:true}
   ],
   donsDansDemarque: false,
-  tauxRemise: [30, 50],
   codesVariables: {actif:true, prefixes:'2', debutArticle:0, longArticle:7, debutValeur:7, longValeur:5, typeValeur:'prix'},
   toleranceDefaut: 2
 };
@@ -386,17 +384,6 @@ function stockTheorique(pid){
   return s;
 }
 
-// Quantité d'une remise déjà jetée (démarque rattachée).
-function jeteSurRemise(remiseId){
-  return actifs().filter(m => m.type==='demarque' && m.lienId===remiseId).reduce((s,m)=>s+(num(m.qte)||0),0);
-}
-function remisesOuvertes(pid){
-  return actifs().filter(m => m.type==='remise' && m.produitId===pid && m.jour >= debutPeriode('30j'))
-    .map(m => ({m, reste: r3((num(m.qte)||0) - jeteSurRemise(m.id))}))
-    .filter(x => x.reste > 0.0005)
-    .sort((a,b)=> a.m.ts < b.m.ts ? 1 : -1);
-}
-
 function stats(p){
   const deb = debutPeriode(p);
   const ms = actifs().filter(m => m.jour >= deb);
@@ -412,16 +399,10 @@ function stats(p){
     (parMotif[km] = parMotif[km] || {v:0,n:0}); parMotif[km].v += v; parMotif[km].n++;
     (parProd[m.produitId] = parProd[m.produitId] || {v:0,n:0,nom:m.produitNom}); parProd[m.produitId].v += v; parProd[m.produitId].n++;
   });
-  const remises = ms.filter(m => m.type==='remise');
-  const idsRem = new Set(remises.map(m=>m.id));
-  const jetesRem = actifs().filter(m => m.type==='demarque' && m.lienId && idsRem.has(m.lienId));
-  const valRem = tot(remises,'valPV'), valJeteRem = jetesRem.reduce((s,m)=>{ const r = remises.find(x=>x.id===m.lienId); return s + (r && isFinite(num(r.pv)) ? (num(m.qte)||0)*num(r.pv) : 0); },0);
   return {
     dem, nDem: dem.length, valDemPA: tot(dem,'valPA'), valDemPV: tot(dem,'valPV'),
     sansPrix: dem.filter(m => !isFinite(num(m.valPA))).length,
     parRayon, parMotif, parProd,
-    remises, valRemPV: valRem, manqueRem: tot(remises,'manque'), nJetesRem: jetesRem.length,
-    ecoulement: valRem ? Math.max(0, 1 - valJeteRem/valRem) : null,
     dons: ms.filter(m=>m.type==='don'), retours: ms.filter(m=>m.type==='retour')
   };
 }
@@ -510,17 +491,6 @@ function vAccueil(){
   <section class="block"><h3>Par motif</h3>${barres(st.parMotif, motifNom)}</section>
 
   <section class="block">
-    <div class="row between"><h3>Remises</h3>${tag('remise')}</div>
-    <p class="tiny muted" style="margin:4px 0 10px">Hors démarque : un produit vendu, même remisé, n’est pas de la démarque.</p>
-    <div class="kv">
-      <div><div class="l">Remises posées</div><div class="mid">${st.remises.length}</div></div>
-      <div><div class="l">Manque à gagner</div><div class="mid">${eur(st.manqueRem)}</div></div>
-      <div><div class="l">Jetées après remise</div><div class="mid">${st.nJetesRem}</div></div>
-      <div><div class="l">Écoulement estimé</div><div class="mid">${st.ecoulement===null?'–':fmtN(st.ecoulement*100,0)+' %'}</div></div>
-    </div>
-  </section>
-
-  <section class="block">
     <h3>Autres sorties</h3>
     <div class="kv" style="margin-top:10px">
       <div><div class="l">Dons${S.params.donsDansDemarque?' (dans la démarque)':''}</div><div class="mid">${st.dons.length}</div><div class="small">${eur(st.dons.reduce((s,m)=>s+(num(m.valPA)||0),0))}</div></div>
@@ -541,8 +511,8 @@ function vAccueil(){
 }
 
 function ligneMvt(m){
-  const extra = m.type==='demarque' ? motifNom(m.motif) : (m.type==='remise' ? '−'+fmtN(num(m.taux),0)+' %' : (m.type==='annulation' ? 'annule une saisie' : ''));
-  return `<div class="item" style="cursor:default;padding:10px 0">${tag(m.type)}<span class="grow"><span class="nm">${esc(m.produitNom)}</span><span class="small muted">${esc(fmtQ(num(m.qte),m.unite))}${extra?', '+esc(extra):''}${m.lienId&&m.type==='demarque'?', après remise':''}</span></span><span class="small num">${heure(m.ts)}</span></div>`;
+  const extra = m.type==='demarque' ? motifNom(m.motif) : (m.type==='annulation' ? 'annule une saisie' : '');
+  return `<div class="item" style="cursor:default;padding:10px 0">${tag(m.type)}<span class="grow"><span class="nm">${esc(m.produitNom)}</span><span class="small muted">${esc(fmtQ(num(m.qte),m.unite))}${extra?', '+esc(extra):''}</span></span><span class="small num">${heure(m.ts)}</span></div>`;
 }
 
 /* ---------- Scanner ---------- */
@@ -632,7 +602,7 @@ function ouvrirSaisie(pid, info, preset){
     if (info.typeValeur==='poids') qte = String(r3(info.valeur));
     else if (isFinite(num(p.pv)) && num(p.pv)>0) qte = String(r3(info.valeur/num(p.pv)));
   }
-  S.sheet = Object.assign({kind:'saisie', pid, info:info||null, action:'demarque', qte, motif:'', taux:String((S.params.tauxRemise||[30])[0]), note:'', lienId:null, err:''}, preset||{});
+  S.sheet = Object.assign({kind:'saisie', pid, info:info||null, action:'demarque', qte, motif:'', note:'', err:''}, preset||{});
   render();
 }
 function sheetSaisie(){
@@ -641,11 +611,9 @@ function sheetSaisie(){
   const q = num(s.qte);
   const pa = num(p.pa), pv = num(p.pv);
   const motifs = S.params.motifs.filter(m=>m.actif!==false);
-  const rem = s.action==='demarque' ? remisesOuvertes(p.id) : [];
-  const lienRem = s.lienId ? S.mouvements.find(m=>m.id===s.lienId) : null;
   const valPA = isFinite(q)&&isFinite(pa) ? q*pa : NaN, valPV = isFinite(q)&&isFinite(pv) ? q*pv : NaN;
-  const coul = {demarque:'var(--dem)', don:'var(--don)', remise:'var(--rem)', retour:'var(--ret)'}[s.action];
-  const libAction = {demarque:'Enregistrer la démarque', don:'Enregistrer le don', remise:'Enregistrer la remise', retour:'Enregistrer le retour'}[s.action];
+  const coul = {demarque:'var(--dem)', don:'var(--don)', retour:'var(--ret)'}[s.action];
+  const libAction = {demarque:'Enregistrer la démarque', don:'Enregistrer le don', retour:'Enregistrer le retour'}[s.action];
 
   return `<div class="grip"></div>
   <div class="row between" style="align-items:flex-start"><div><div class="sh-title">${esc(p.nom)}</div>
@@ -655,29 +623,20 @@ function sheetSaisie(){
 
   <div class="seg" style="margin:14px 0" role="group" aria-label="Type de saisie">${ACTIONS_V1.map(a=>`<button aria-pressed="${s.action===a}" onclick="A.set('action','${a}',true)">${esc(TYPES[a].nom.replace(' fournisseur',''))}</button>`).join('')}</div>
 
-  ${lienRem ? `<p class="note">Produit remisé à −${fmtN(num(lienRem.taux),0)} % le ${esc(jourLong(lienRem.jour).toLowerCase())}, finalement jeté : compté en démarque au prix d’achat. <button class="btn sm" onclick="A.set('lienId',null,true)">Détacher</button></p>`:''}
-
   <label class="f"><span>Quantité</span><div class="qty"><button onclick="A.pas(-1)" aria-label="Moins">−</button><input type="text" inputmode="decimal" id="s_qte" value="${esc(s.qte)}" oninput="A.set('qte',this.value)"><span class="u">${esc(UNITES[u])}</span><button onclick="A.pas(1)" aria-label="Plus">+</button></div></label>
 
   ${s.action==='demarque' ? `<div class="f"><span class="small muted" style="display:block;margin-bottom:6px">Motif</span><div class="chips">${motifs.map(m=>`<button class="chip" aria-pressed="${s.motif===m.id}" onclick="A.set('motif','${esc(m.id)}',true)">${esc(m.nom)}</button>`).join('')}</div></div>`:''}
-
-  ${s.action==='remise' ? `<div class="f"><span class="small muted" style="display:block;margin-bottom:6px">Taux de remise</span><div class="row wrap"><div class="chips">${(S.params.tauxRemise||[]).map(t=>`<button class="chip" aria-pressed="${String(s.taux)===String(t)}" onclick="A.set('taux','${t}',true)">−${t} %</button>`).join('')}</div>
-  <input type="text" inputmode="decimal" style="max-width:110px" placeholder="Autre %" value="${(S.params.tauxRemise||[]).map(String).includes(String(s.taux))?'':esc(s.taux)}" oninput="A.set('taux',this.value)"></div>
-  <p class="tiny muted" style="margin:8px 0 0">La remise n’est pas de la démarque. Si le produit est finalement jeté, rescanne-le et choisis « Jeter » sur la remise.</p></div>`:''}
-
-  ${rem.length && !s.lienId ? `<div class="f"><span class="small muted" style="display:block;margin-bottom:6px">Remises en cours sur ce produit</span>${rem.map(x=>`<div class="row between" style="padding:6px 0"><span class="small">−${fmtN(num(x.m.taux),0)} %, ${esc(jourLong(x.m.jour).toLowerCase())}, reste ${esc(fmtQ(x.reste,x.m.unite))}</span><button class="btn sm" onclick="A.jeterRemise('${esc(x.m.id)}')">Jeter</button></div>`).join('')}</div>`:''}
 
   <label class="f"><span>Note (facultatif, jamais de nom de personne)</span><input type="text" id="s_note" value="${esc(s.note)}" oninput="A.set('note',this.value)" placeholder="${s.action==='retour'?'Ex. : n° de bon, fournisseur':'Ex. : bac de la réserve'}"></label>
 
   <p class="small muted" id="s_val">${valeurSaisie(s,p)}</p>
   ${s.err ? `<p class="err">${esc(s.err)}</p>`:''}
-  <button class="btn primary block100" style="background:${coul};border-color:${coul};${s.action==='remise'?'color:#2A1D00':''}" onclick="A.enregistrer()">${libAction}</button>
+  <button class="btn primary block100" style="background:${coul};border-color:${coul}" onclick="A.enregistrer()">${libAction}</button>
   <button class="btn block100" style="margin-top:8px" onclick="A.fermer()">Annuler</button>`;
 }
 function valeurSaisie(s,p){
   const q = num(s.qte), pa = num(p.pa), pv = num(p.pv);
   if (!isFinite(q) || q<=0) return 'Indique une quantité.';
-  if (s.action==='remise'){ const t = num(s.taux); return isFinite(pv)&&isFinite(t) ? `Manque à gagner : ${eur(q*pv*t/100)}` : 'Ajoute le prix de vente dans la fiche pour chiffrer la remise.'; }
   if (!isFinite(pa)) return 'Pas de prix d’achat dans la fiche : la ligne sera enregistrée sans valeur.';
   return `Valeur : ${eur(q*pa)} au prix d’achat${isFinite(pv)&&!S.discret?`, ${eur(q*pv)} au prix de vente`:''}.`;
 }
@@ -688,7 +647,6 @@ function enregistrer(){
   if (!isFinite(q) || q<=0) s.err = 'La quantité doit être supérieure à zéro.';
   else if (p.uniteVente!=='kg' && Math.abs(q-Math.round(q))>1e-9 && p.uniteVente==='piece') s.err = 'Un produit vendu à la pièce se compte en nombre entier.';
   else if (s.action==='demarque' && !s.motif) s.err = 'Choisis un motif de démarque.';
-  else if (s.action==='remise' && !(num(s.taux)>0 && num(s.taux)<100)) s.err = 'Indique un taux de remise entre 1 et 99 %.';
   if (s.err){ renderSheet(); return; }
   const pa = num(p.pa), pv = num(p.pv), now = new Date();
   const m = {
@@ -698,16 +656,13 @@ function enregistrer(){
     pa: isFinite(pa)?pa:null, pv: isFinite(pv)?pv:null,
     valPA: isFinite(pa) ? r2(q*pa) : null, valPV: isFinite(pv) ? r2(q*pv) : null,
     motif: s.action==='demarque' ? s.motif : null,
-    taux: s.action==='remise' ? num(s.taux) : null,
-    manque: s.action==='remise' && isFinite(pv) ? r2(q*pv*num(s.taux)/100) : null,
-    lienId: s.lienId || null,
     code: s.info ? s.info.code : null, montantEtiquette: s.info && s.info.variable && s.info.typeValeur==='prix' ? s.info.valeur : null,
     source: s.info ? 'scan' : 'manuel', note: (s.note||'').trim(),
     auteur: S.user ? S.user.uid : 'local', version: VERSION
   };
   Store.put('mouvements', m);
   if (!p.niveau) Store.put('produits', Object.assign({}, p, {niveau:1, majLe:now.toISOString()}));
-  toast({demarque:'Démarque enregistrée', don:'Don enregistré', remise:'Remise enregistrée', retour:'Retour enregistré'}[s.action]);
+  toast({demarque:'Démarque enregistrée', don:'Don enregistré', retour:'Retour enregistré'}[s.action]);
   S.sheet = null;
   if (S.vue==='scanner'){ S.camErr=''; S.camPause = !S.rafale; }
   render();
@@ -846,10 +801,10 @@ function vJournal(){
   </div>
   ${ms.length ? Object.keys(parJour).map(j => `<div class="dayhead">${esc(jourLong(j))}</div><div class="list">${parJour[j].map(m => {
     const barre = ann.has(m.id);
-    const extra = m.type==='demarque' ? motifNom(m.motif) : (m.type==='remise' ? '−'+fmtN(num(m.taux),0)+' %' : (m.type==='annulation' ? 'annule une saisie' : ''));
-    const valeur = m.type==='remise' ? eur(num(m.manque)) : eur(num(m.valPA));
+    const extra = m.type==='demarque' ? motifNom(m.motif) : (m.type==='annulation' ? 'annule une saisie' : '');
+    const valeur = eur(num(m.valPA));
     return `<div class="item" style="cursor:default;${barre?'opacity:.5':''}">${tag(m.type)}<span class="grow"><span class="nm" style="${barre?'text-decoration:line-through':''}">${esc(m.produitNom)}</span>
-    <span class="small muted">${esc(fmtQ(num(m.qte),m.unite))}${extra?', '+esc(extra):''}${m.lienId&&m.type==='demarque'?', après remise':''}${m.note?', '+esc(m.note):''}, ${heure(m.ts)}${barre?', annulée':''}</span></span>
+    <span class="small muted">${esc(fmtQ(num(m.qte),m.unite))}${extra?', '+esc(extra):''}${m.note?', '+esc(m.note):''}, ${heure(m.ts)}${barre?', annulée':''}</span></span>
     <span class="small num">${m.type!=='annulation'?valeur:''}</span>
     ${!barre && m.type!=='annulation' ? `<button class="btn sm" onclick="A.annuler('${esc(m.id)}')" aria-label="Annuler cette saisie">Annuler</button>`:''}</div>`; }).join('')}</div>`).join('')
   : '<div class="empty">Aucune saisie sur cette période.</div>'}
@@ -890,7 +845,6 @@ function vReglages(){
 
   <section class="block"><div class="row between"><h3>Motifs de démarque</h3><button class="btn sm" onclick="A.ajoutMotif()">Ajouter</button></div>
     ${P.motifs.map((m,i)=>`<div class="row" style="margin-top:8px"><input type="text" value="${esc(m.nom)}" onchange="A.majMotif(${i},'nom',this.value)" aria-label="Motif"><label class="check small"><input type="checkbox" ${m.actif!==false?'checked':''} onchange="A.majMotif(${i},'actif',this.checked)"> Actif</label></div>`).join('')}
-    <label class="f" style="margin-top:12px"><span>Taux de remise proposés (%)</span><input type="text" value="${esc((P.tauxRemise||[]).join(', '))}" onchange="A.tauxRemise(this.value)"></label>
   </section>
 
   <section class="block"><h3>Dons</h3>
@@ -974,7 +928,7 @@ window.A = {
   set(k, v, redessiner){
     if (!S.sheet) return;
     S.sheet[k] = v;
-    if (k==='action'){ S.sheet.err=''; if (v!=='demarque') S.sheet.lienId = null; }
+    if (k==='action') S.sheet.err='';
     if (redessiner) renderSheet();
     else if (S.sheet.kind==='saisie'){ const e = $('#s_val'); const p = prod(S.sheet.pid); if (e && p) e.textContent = valeurSaisie(S.sheet, p); }
   },
@@ -984,12 +938,6 @@ window.A = {
     q = Math.max(0, r3(q + d*step)); s.qte = String(q);
     const e = $('#s_qte'); if (e) e.value = s.qte;
     const v = $('#s_val'); if (v) v.textContent = valeurSaisie(s, p);
-  },
-  jeterRemise(id){
-    const r = S.mouvements.find(m=>m.id===id); if (!r) return;
-    const reste = r3((num(r.qte)||0) - jeteSurRemise(id));
-    Object.assign(S.sheet, {action:'demarque', lienId:id, qte:String(reste), motif:'perime', err:''});
-    renderSheet();
   },
   enregistrer, sauverFiche, annuler,
   fermer(){ S.sheet = null; if (S.vue==='scanner') S.camErr=''; render(); },
@@ -1005,7 +953,6 @@ window.A = {
     const p = S.produits.find(x=>(x.codes||[]).includes(d.cle));
     e.textContent = `Code article ${d.cle}${p?' ('+p.nom+')':', aucune fiche'} ; ${d.typeValeur==='poids' ? fmtN(d.valeur,3)+' kg' : fmtN(d.valeur,2)+' €'}.`;
   },
-  tauxRemise(v){ const t = v.split(/[,;\s]+/).map(x=>parseInt(x,10)).filter(x=>x>0&&x<100); A.param('tauxRemise', t.length?t:[30,50]); },
   ajoutMotif(){ const n = prompt('Nom du nouveau motif de démarque'); if (!n||!n.trim()) return; const p = clone(S.params); p.motifs.push({id:'m-'+uid().slice(0,8), nom:n.trim(), actif:true}); Store.params(p); },
   majMotif(i,k,v){ const p = clone(S.params); if (!p.motifs[i]) return; p.motifs[i][k] = k==='nom' ? (v.trim()||p.motifs[i].nom) : v; Store.params(p); },
   ajoutRayon(){ const n = prompt('Nom du rayon'); if (!n||!n.trim()) return; Store.put('rayons', {id:uid(), nom:n.trim(), ordre:S.rayons.length, transformation:false, tolerance:null, fonctionnement:'', actif:true}); },
@@ -1017,9 +964,9 @@ window.A = {
   exportJSON(){ telecharger(`stocks-${MAG}-${iso(new Date())}.json`, JSON.stringify({application:'stocks', version:VERSION, magasin:MAG, exporteLe:new Date().toISOString(), params:S.params, rayons:S.rayons, produits:S.produits, mouvements:S.mouvements}, null, 1), 'application/json'); },
   exportCSV(){
     const ann = annules();
-    const cols = ['date','heure','type','produit','rayon','quantite','unite','motif','taux_remise','valeur_achat_HT','valeur_vente_TTC','manque_a_gagner','apres_remise','annulee','note','code'];
+    const cols = ['date','heure','type','produit','rayon','quantite','unite','motif','valeur_achat_HT','valeur_vente_TTC','annulee','note','code'];
     const n = x => (x==null||x==='' ? '' : String(x).replace('.',','));
-    const lignes = S.mouvements.slice().sort((a,b)=>a.ts<b.ts?-1:1).map(m => [m.jour, heure(m.ts), (TYPES[m.type]||{nom:m.type}).nom, m.produitNom, (rayon(m.rayonId)||{nom:''}).nom, n(m.qte), m.unite, m.type==='demarque'?motifNom(m.motif):'', n(m.taux), n(m.valPA), n(m.valPV), n(m.manque), m.lienId&&m.type==='demarque'?'oui':'', ann.has(m.id)?'oui':'', m.note||'', m.code||'']);
+    const lignes = S.mouvements.slice().sort((a,b)=>a.ts<b.ts?-1:1).map(m => [m.jour, heure(m.ts), (TYPES[m.type]||{nom:m.type}).nom, m.produitNom, (rayon(m.rayonId)||{nom:''}).nom, n(m.qte), m.unite, m.type==='demarque'?motifNom(m.motif):'', n(m.valPA), n(m.valPV), ann.has(m.id)?'oui':'', m.note||'', m.code||'']);
     const csv = [cols, ...lignes].map(l => l.map(c => `"${String(c==null?'':c).replace(/"/g,'""')}"`).join(';')).join('\r\n');
     telecharger(`stocks-saisies-${iso(new Date())}.csv`, '\ufeff'+csv, 'text/csv;charset=utf-8');
   },
