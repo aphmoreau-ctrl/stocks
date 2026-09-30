@@ -1,4 +1,4 @@
-# Stocks, version 1.0.1
+# Stocks, version 1.0.2
 
 Application de justesse des stocks et de suivi de la démarque des rayons frais.
 

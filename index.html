@@ -84,9 +84,14 @@ nav.tabs .scan{background:var(--accent);color:var(--accent-ink)!important;border
 .lvl{display:inline-flex;gap:2px;align-items:center;vertical-align:middle}
 .lvl i{width:7px;height:14px;border-radius:2px;background:var(--line)}
 .lvl i.on{background:var(--accent)}
-.lvlrow{display:grid;grid-template-columns:repeat(6,1fr);gap:6px}
-.lvlrow div{background:var(--surface2);border-radius:8px;padding:8px 4px;text-align:center}
-.lvlrow b{display:block;font:700 24px/1 var(--cond)}
+.lvllist{margin-top:6px}
+.lvlitem{display:flex;align-items:center;gap:12px;padding:9px 0;border-top:1px solid var(--line)}
+.lvlitem:first-child{border-top:0}
+.lvlitem .grow{flex:1;min-width:0}
+.lvlitem b{font:700 24px/1 var(--cond);font-variant-numeric:tabular-nums;min-width:2ch;text-align:right}
+.lvlitem.zero{color:var(--muted)}
+#etat{white-space:nowrap}
+@media (max-width:430px){ #etat .txt{display:none} .brand{font-size:24px} }
 
 /* Barres */
 .bar{margin:8px 0}
@@ -174,7 +179,7 @@ textarea{min-height:70px;resize:vertical}
 /* ============================================================
    CONSTANTES ET MODÈLE DE DONNÉES (prévu pour toutes les versions)
    ============================================================ */
-const VERSION = '1.0.1';
+const VERSION = '1.0.2';
 const CFG = window.STOCKS_CONFIG || {};
 const MAG = CFG.magasinId || 'la-vaugine';
 const LOCAL = !CFG.firebase;
@@ -439,7 +444,7 @@ function entete(){
   <span id="etat" class="small muted">${etatSync()}</span>
   <button class="iconbtn" onclick="A.discret()" aria-label="${S.discret?'Afficher les montants':'Masquer les montants'}" title="${S.discret?'Afficher les montants':'Masquer les montants'}">${S.discret?ICON.oeilBarre:ICON.oeil}</button></header>`;
 }
-function etatSync(){ return LOCAL ? 'Sur cet appareil' : (S.enLigne ? '<span class="dot"></span> Synchronisé' : '<span class="dot off"></span> Hors ligne'); }
+function etatSync(){ return LOCAL ? '<span class="dot off"></span> <span class="txt">Sur cet appareil</span>' : (S.enLigne ? '<span class="dot"></span> <span class="txt">Synchronisé</span>' : '<span class="dot off"></span> <span class="txt">Hors ligne</span>'); }
 function majEntete(){ const e = $('#etat'); if (e) e.innerHTML = etatSync(); }
 function onglets(){
   const t = [['accueil','Accueil'],['produits','Produits'],['scanner','Scanner'],['journal','Journal'],['reglages','Réglages']];
@@ -476,7 +481,7 @@ function vAccueil(){
 
   <section class="block">
     <div class="row between"><h2>Démarque connue</h2>${tag('demarque')}</div>
-    <div class="big" style="margin-top:10px">${eur(st.valDemPA)}</div>
+    <div class="big" style="margin-top:10px">${st.nDem ? eur(st.valDemPA) : '0'}</div>
     <div class="muted small">au prix d’achat HT${S.discret?'':` ; ${eur(st.valDemPV)} au prix de vente`}</div>
     <div class="small" style="margin-top:6px">${st.nDem} ${plur(st.nDem,'ligne','lignes')} de démarque${S.params.donsDansDemarque?', dons compris':''}</div>
     ${st.sansPrix ? `<p class="warn" style="margin:10px 0 0">${st.sansPrix} ${plur(st.sansPrix,'ligne n’a','lignes n’ont')} pas de prix d’achat : complète les fiches produits pour une valorisation juste.</p>`:''}
@@ -493,15 +498,15 @@ function vAccueil(){
   <section class="block">
     <h3>Autres sorties</h3>
     <div class="kv" style="margin-top:10px">
-      <div><div class="l">Dons${S.params.donsDansDemarque?' (dans la démarque)':''}</div><div class="mid">${st.dons.length}</div><div class="small">${eur(st.dons.reduce((s,m)=>s+(num(m.valPA)||0),0))}</div></div>
-      <div><div class="l">Retours fournisseurs</div><div class="mid">${st.retours.length}</div><div class="small">${eur(st.retours.reduce((s,m)=>s+(num(m.valPA)||0),0))}</div></div>
+      <div><div class="l">Dons${S.params.donsDansDemarque?' (dans la démarque)':''}</div><div class="mid">${st.dons.length}</div>${st.dons.length?`<div class="small">${eur(st.dons.reduce((s,m)=>s+(num(m.valPA)||0),0))}</div>`:''}</div>
+      <div><div class="l">Retours fournisseurs</div><div class="mid">${st.retours.length}</div>${st.retours.length?`<div class="small">${eur(st.retours.reduce((s,m)=>s+(num(m.valPA)||0),0))}</div>`:''}</div>
     </div>
   </section>
 
   <section class="block">
     <h3>Suivi des produits</h3>
-    <p class="tiny muted" style="margin:4px 0 10px">Nombre de références par niveau, de 0 (non suivie) à 5 (commande pilotée).</p>
-    <div class="lvlrow">${niv.map(x=>`<div title="${esc(NIVEAUX[x.n].nom)}"><b>${x.c}</b><span class="tiny">${x.n}. ${esc(NIVEAUX[x.n].nom)}</span></div>`).join('')}</div>
+    <p class="tiny muted" style="margin:4px 0 4px">Nombre de références à chaque niveau.</p>
+    <div class="lvllist">${niv.map(x=>`<div class="lvlitem ${x.c?'':'zero'}">${lvl(x.n)}<span class="grow">${x.n}. ${esc(NIVEAUX[x.n].nom)}</span><b>${x.c}</b></div>`).join('')}</div>
   </section>
 
   ${top.length ? `<section class="block"><h3>Produits les plus démarqués</h3><div style="margin-top:8px">${top.map(([id,x])=>`<button class="item" style="padding:10px 0" onclick="A.fiche('${esc(id)}')"><span class="grow"><span class="nm">${esc((prod(id)||x).nom)}</span></span><span class="num">${baseV?eur(x.v):x.n+' '+plur(x.n,'ligne','lignes')}</span></button>`).join('')}</div></section>`:''}
