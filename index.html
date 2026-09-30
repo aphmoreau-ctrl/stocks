@@ -78,7 +78,24 @@ nav.tabs .scan{background:var(--accent);color:var(--accent-ink)!important;border
 /* Étiquettes de mouvement (forme d'étiquette de gondole) */
 .tag{display:inline-flex;align-items:center;font:600 14px/1 var(--cond);letter-spacing:.02em;padding:5px 9px 5px 13px;color:#fff;background:var(--neutral);clip-path:polygon(7px 0,100% 0,100% 100%,7px 100%,0 50%);border-radius:0 4px 4px 0;white-space:nowrap}
 .t-demarque{background:var(--dem)} .t-don{background:var(--don)} .t-retour{background:var(--ret)}
-.t-reception,.t-transfo_entree,.t-cession_entree{background:var(--ok)} .t-annulation{background:var(--neutral)}
+.t-reception,.t-transfo_entree,.t-cession_entree{background:var(--ok)} .t-annulation{background:var(--neutral)} .t-comptage{background:var(--accent);color:var(--accent-ink)}
+.kpis{display:flex;gap:16px;text-align:right}
+.kpis b{display:block;font:700 21px/1.05 var(--cond);font-variant-numeric:tabular-nums}
+.kpis small{display:block;color:var(--muted);font-size:12px}
+.tbl{width:100%;border-collapse:collapse;font-size:14.5px}
+.tbl th,.tbl td{padding:7px 6px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
+.tbl th:first-child,.tbl td:first-child{text-align:left}
+.tbl th{font-weight:600;color:var(--muted);font-size:13px}
+.tbl tr.tot td{font-weight:700;border-top:2px solid var(--ink)}
+.scrollx{overflow-x:auto}
+.invrow{display:flex;align-items:center;gap:8px;padding:10px 0;border-top:1px solid var(--line)}
+.invrow:first-child{border-top:0}
+.invrow .grow{flex:1;min-width:0}
+.invrow input[type=text]{width:78px;flex:0 0 78px;min-height:48px;text-align:center;font:600 19px/1 var(--cond);padding:6px}
+.invrow .nm{font-weight:600;line-height:1.25;word-break:break-word}
+.invhead{position:sticky;top:calc(64px + env(safe-area-inset-top,0px));z-index:5;background:var(--bg);padding:8px 0}
+.navj{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px}
+.navj b{font-family:var(--cond);font-size:20px;font-weight:600;text-align:center;flex:1}
 
 /* Niveaux */
 .lvl{display:inline-flex;gap:2px;align-items:center;vertical-align:middle}
@@ -179,7 +196,7 @@ textarea{min-height:70px;resize:vertical}
 /* ============================================================
    CONSTANTES ET MODÈLE DE DONNÉES (prévu pour toutes les versions)
    ============================================================ */
-const VERSION = '1.0.2';
+const VERSION = '1.1.0';
 const CFG = window.STOCKS_CONFIG || {};
 const MAG = CFG.magasinId || 'la-vaugine';
 const LOCAL = !CFG.firebase;
@@ -282,7 +299,9 @@ function vibre(){ try{ navigator.vibrate && navigator.vibrate(60); }catch(e){} }
    ============================================================ */
 const S = {
   pret:false, user:null, erreurInit:'',
-  produits:[], rayons:[], mouvements:[], params:clone(DEF_PARAMS),
+  produits:[], rayons:[], mouvements:[], chiffres:[], inventaires:[], params:clone(DEF_PARAMS),
+  refJour: iso(new Date()), cj: iso(new Date()),
+  inv: ls.get('stocks-inv-encours', null), invRayon:'', invQ:'', aRedessiner:false,
   vue:'accueil', periode:'jour',
   discret: ls.get('stocks-discret', true),
   rafale: ls.get('stocks-rafale', true),
@@ -304,7 +323,7 @@ const Store = {
   async init(){
     if (LOCAL){
       const d = ls.get(LS_KEY, null);
-      if (d){ S.produits = d.produits||[]; S.rayons = d.rayons||[]; S.mouvements = d.mouvements||[]; S.params = deepMerge(DEF_PARAMS, d.params); }
+      if (d){ S.produits = d.produits||[]; S.rayons = d.rayons||[]; S.mouvements = d.mouvements||[]; S.chiffres = d.chiffres||[]; S.inventaires = d.inventaires||[]; S.params = deepMerge(DEF_PARAMS, d.params); }
       if (!S.rayons.length) semerRayons();
       S.user = {uid:'local', email:''}; S.pret = true; render();
       return;
@@ -331,13 +350,15 @@ const Store = {
     }, err));
     const depuis = new Date(); depuis.setDate(depuis.getDate()-400);
     unsubs.push(this.col('mouvements').where('jour','>=',iso(depuis)).onSnapshot(s => { S.mouvements = s.docs.map(d=>d.data()); render(); }, err));
+    unsubs.push(this.col('chiffres').where('jour','>=',iso(depuis)).onSnapshot(s => { S.chiffres = s.docs.map(d=>d.data()); render(); }, err));
+    unsubs.push(this.col('inventaires').where('jour','>=',iso(depuis)).onSnapshot(s => { S.inventaires = s.docs.map(d=>d.data()); render(); }, err));
     unsubs.push(this.col('parametres').doc('general').onSnapshot(d => {
       if (d.exists) S.params = deepMerge(DEF_PARAMS, d.data());
       else if (!d.metadata.fromCache) this.params(clone(DEF_PARAMS));
       render();
     }, err));
   },
-  sauverLocal(){ ls.set(LS_KEY, {produits:S.produits, rayons:S.rayons, mouvements:S.mouvements, params:S.params}); },
+  sauverLocal(){ ls.set(LS_KEY, {produits:S.produits, rayons:S.rayons, mouvements:S.mouvements, chiffres:S.chiffres, inventaires:S.inventaires, params:S.params}); },
   put(coll, obj){
     obj = clone(obj);
     if (LOCAL){
@@ -355,7 +376,7 @@ const Store = {
   }
 };
 function semerRayons(){
-  DEF_RAYONS.forEach(([nom,transfo],i) => Store.put('rayons', {id:uid(), nom, ordre:i, transformation:transfo, tolerance:null, fonctionnement:'', actif:true}));
+  DEF_RAYONS.forEach(([nom,transfo],i) => Store.put('rayons', {id:uid(), nom, ordre:i, transformation:transfo, tolerance:null, tauxMarque:null, fonctionnement:'', actif:true}));
 }
 
 /* ============================================================
@@ -367,7 +388,12 @@ const rayonsTries = (tous) => S.rayons.filter(r => tous || r.actif!==false).sort
 const motifNom = id => { const m = S.params.motifs.find(x=>x.id===id); return m ? m.nom : (id==='don' ? 'Dons' : (id||'Sans motif')); };
 
 function annules(){ return new Set(S.mouvements.filter(m=>m.type==='annulation').map(m=>m.lienId)); }
-function actifs(){ const a = annules(); return S.mouvements.filter(m => m.type!=='annulation' && !a.has(m.id)); }
+let _act = {ref:null, n:-1, v:[]};
+function actifs(){
+  if (_act.ref===S.mouvements && _act.n===S.mouvements.length) return _act.v;
+  const a = annules(); _act = {ref:S.mouvements, n:S.mouvements.length, v:S.mouvements.filter(m => m.type!=='annulation' && !a.has(m.id))};
+  return _act.v;
+}
 const estDemarque = m => m.type==='demarque' || (m.type==='don' && S.params.donsDansDemarque);
 
 function debutPeriode(p){
@@ -389,27 +415,75 @@ function stockTheorique(pid){
   return s;
 }
 
-function stats(p){
-  const deb = debutPeriode(p);
-  const ms = actifs().filter(m => m.jour >= deb);
-  const val = m => num(m.valPA);
-  const tot = (arr,k) => arr.reduce((s,m)=>s+(isFinite(num(m[k]))?num(m[k]):0),0);
+function range(p){
+  const fin = p==='jour' ? S.refJour : iso(new Date());
+  if (p==='jour') return {deb:fin, fin};
+  const d = new Date(fin+'T12:00:00');
+  if (p==='7j') d.setDate(d.getDate()-6); else if (p==='30j') d.setDate(d.getDate()-29); else if (p==='mois') d.setDate(1);
+  return {deb:iso(d), fin};
+}
+function decale(j,n){ const d = new Date(j+'T12:00:00'); d.setDate(d.getDate()+n); return iso(d); }
+function jours(deb,fin){ const r = []; let j = deb; let garde = 0; while (j<=fin && garde++<800){ r.push(j); j = decale(j,1); } return r; }
+const jCourt = j => new Date(j+'T12:00:00').toLocaleDateString('fr-FR',{day:'numeric',month:'short'});
+const vNum = (arr,k) => arr.reduce((s,x)=>s+(isFinite(num(x[k]))?num(x[k]):0),0);
+
+// Démarque connue détaillée (motifs, produits) sur une période.
+function stats(deb,fin){
+  const ms = actifs().filter(m => m.jour>=deb && m.jour<=fin);
   const dem = ms.filter(estDemarque);
-  const parRayon = {}, parMotif = {}, parProd = {};
+  const parMotif = {}, parProd = {};
   dem.forEach(m => {
-    const v = isFinite(val(m)) ? val(m) : 0;
-    const kr = m.rayonId || '_';
-    (parRayon[kr] = parRayon[kr] || {v:0,n:0}); parRayon[kr].v += v; parRayon[kr].n++;
+    const v = isFinite(num(m.valPA)) ? num(m.valPA) : 0;
     const km = m.type==='don' ? 'don' : (m.motif||'autre');
     (parMotif[km] = parMotif[km] || {v:0,n:0}); parMotif[km].v += v; parMotif[km].n++;
     (parProd[m.produitId] = parProd[m.produitId] || {v:0,n:0,nom:m.produitNom}); parProd[m.produitId].v += v; parProd[m.produitId].n++;
   });
+  return {dem, parMotif, parProd, dons: ms.filter(m=>m.type==='don'), retours: ms.filter(m=>m.type==='retour')};
+}
+
+// Indicateurs d'un rayon (ou de tous si rid est vide) sur une période.
+function kpi(rid,deb,fin){
+  const ch = S.chiffres.filter(c => c.jour>=deb && c.jour<=fin && (!rid || c.rayonId===rid));
+  const dem = actifs().filter(m => estDemarque(m) && m.jour>=deb && m.jour<=fin && (!rid || m.rayonId===rid));
   return {
-    dem, nDem: dem.length, valDemPA: tot(dem,'valPA'), valDemPV: tot(dem,'valPV'),
-    sansPrix: dem.filter(m => !isFinite(num(m.valPA))).length,
-    parRayon, parMotif, parProd,
-    dons: ms.filter(m=>m.type==='don'), retours: ms.filter(m=>m.type==='retour')
+    ventes: vNum(ch,'ventesHT'), achats: vNum(ch,'achatsHT'),
+    casse: vNum(dem,'valPA'), nDem: dem.length, sansPrix: dem.filter(m=>!isFinite(num(m.valPA))).length,
+    casseSys: vNum(ch,'casseSysteme'), casseSysSaisie: ch.some(c=>isFinite(num(c.casseSysteme))),
+    aChiffres: ch.some(c=>isFinite(num(c.ventesHT)))
   };
+}
+
+// Inventaires d'un rayon : un par jour (le dernier enregistré), du plus ancien au plus récent.
+function invsRayon(rid){
+  const par = {};
+  S.inventaires.filter(i => i.rayonId===rid && !i.annule).forEach(i => { const x = par[i.jour]; if (!x || x.ts < i.ts) par[i.jour] = i; });
+  return Object.values(par).sort((a,b)=> a.jour<b.jour ? -1 : 1);
+}
+// Delta entre deux inventaires (inventaires de fin de journée).
+function delta(rid,a,b){
+  const r = rayon(rid) || {};
+  const deb = decale(a.jour,1), fin = b.jour;
+  const k = kpi(rid,deb,fin);
+  const tm = num(r.tauxMarque);
+  const sorties = num(a.valeurPA) + k.achats - num(b.valeurPA);
+  const coutVentes = isFinite(tm) ? k.ventes*(1-tm/100) : NaN;
+  const totale = sorties - coutVentes;
+  const manquants = jours(deb,fin).filter(j => !S.chiffres.some(c => c.jour===j && c.rayonId===rid && isFinite(num(c.ventesHT)))).length;
+  return {a, b, deb, fin, k, tm, sorties, coutVentes, totale, inconnue: totale - k.casse,
+    margeReelle: k.ventes - sorties, tmReel: k.ventes ? (k.ventes - sorties)/k.ventes : NaN, manquants, nbJours: jours(deb,fin).length};
+}
+function dernierDelta(rid){ const iv = invsRayon(rid); return iv.length<2 ? null : delta(rid, iv[iv.length-2], iv[iv.length-1]); }
+// Cumul des deltas dont l'inventaire de fin tombe dans la période.
+function deltaPeriode(rid,deb,fin){
+  const iv = invsRayon(rid); let r = null;
+  for (let i=1; i<iv.length; i++){
+    if (iv[i].jour<deb || iv[i].jour>fin) continue;
+    const d = delta(rid, iv[i-1], iv[i]);
+    r = r || {inconnue:0, totale:0, casse:0, ventes:0, n:0, manquants:0, sansTM:false};
+    if (!isFinite(d.tm)){ r.sansTM = true; continue; }
+    r.inconnue += d.inconnue; r.totale += d.totale; r.casse += d.k.casse; r.ventes += d.k.ventes; r.n++; r.manquants += d.manquants;
+  }
+  return r;
 }
 
 /* ============================================================
@@ -421,6 +495,9 @@ const ICON = {
   produits:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M3 8l9-5 9 5-9 5-9-5zM3 8v8l9 5 9-5V8M12 13v8"/></svg>',
   journal:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>',
   reglages:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg>',
+  chiffres:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 7h8M8 12h2M14 12h2M8 16h2M14 16h2"/></svg>',
+  inventaire:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4h6v3H9zM7 5H5v16h14V5h-2M8 12l2 2 4-4M8 17h8"/></svg>',
+  plus:'<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>',
   oeil:'<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>',
   oeilBarre:'<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 3l18 18M10.6 5.1A11 11 0 0 1 12 5c7 0 11 7 11 7a18 18 0 0 1-3.2 4M6.6 6.6A18 18 0 0 0 1 12s4 7 11 7a10 10 0 0 0 5.4-1.6M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>'
 };
@@ -434,7 +511,11 @@ function render(){
   if (!S.user){ app.innerHTML = vConnexion(); return; }
   // Ne pas redessiner l'écran pendant que la caméra filme (sinon la vidéo est coupée).
   if (S.vue==='scanner' && S.camOn && $('#reader')){ majEntete(); renderSheet(); return; }
-  const vues = {accueil:vAccueil, scanner:vScanner, produits:vProduits, journal:vJournal, reglages:vReglages};
+  // Pendant une saisie de chiffres ou d'inventaire, ne pas redessiner (le clavier se fermerait).
+  const act = document.activeElement;
+  if (['chiffres','inventaire'].includes(S.vue) && act && act.tagName==='INPUT' && $('#main') && $('#main').contains(act)){ S.aRedessiner = true; majEntete(); renderSheet(); return; }
+  S.aRedessiner = false;
+  const vues = {accueil:vAccueil, chiffres:vChiffres, scanner:vScanner, inventaire:vInventaire, plus:vPlus, produits:vProduits, journal:vJournal, reglages:vReglages};
   app.innerHTML = entete() + `<main id="main">${(vues[S.vue]||vAccueil)()}</main>` + onglets();
   renderSheet();
   if (S.vue==='scanner' && !S.camOn && !S.camErr && !S.camPause && !S.sheet) demarrerCamera();
@@ -447,8 +528,9 @@ function entete(){
 function etatSync(){ return LOCAL ? '<span class="dot off"></span> <span class="txt">Sur cet appareil</span>' : (S.enLigne ? '<span class="dot"></span> <span class="txt">Synchronisé</span>' : '<span class="dot off"></span> <span class="txt">Hors ligne</span>'); }
 function majEntete(){ const e = $('#etat'); if (e) e.innerHTML = etatSync(); }
 function onglets(){
-  const t = [['accueil','Accueil'],['produits','Produits'],['scanner','Scanner'],['journal','Journal'],['reglages','Réglages']];
-  return `<nav class="tabs">${t.map(([k,l]) => `<button class="${k==='scanner'?'scan':''}" onclick="A.vue('${k}')" ${S.vue===k?'aria-current="page"':''}>${ICON[k]}<span>${l}</span></button>`).join('')}</nav>`;
+  const t = [['accueil','Accueil'],['chiffres','Chiffres'],['scanner','Scanner'],['inventaire','Inventaire'],['plus','Plus']];
+  const cur = ['produits','journal','reglages'].includes(S.vue) ? 'plus' : S.vue;
+  return `<nav class="tabs">${t.map(([k,l]) => `<button class="${k==='scanner'?'scan':''}" onclick="A.vue('${k}')" ${cur===k?'aria-current="page"':''}>${ICON[k]}<span>${l}</span></button>`).join('')}</nav>`;
 }
 
 /* ---------- Connexion ---------- */
@@ -463,43 +545,64 @@ function vConnexion(){
 
 /* ---------- Accueil ---------- */
 function vAccueil(){
-  const st = stats(S.periode);
-  const per = [['jour','Aujourd’hui'],['7j','7 jours'],['30j','30 jours'],['mois','Ce mois']];
-  const baseV = st.valDemPA > 0;
-  const barres = (obj, nomF) => {
-    const ent = Object.entries(obj).sort((a,b)=> baseV ? b[1].v-a[1].v : b[1].n-a[1].n);
-    if (!ent.length) return '<p class="muted small">Aucune démarque sur la période.</p>';
-    const tot = ent.reduce((s,[,x])=>s+(baseV?x.v:x.n),0);
-    return ent.map(([k,x]) => { const part = baseV ? x.v : x.n;
-      return `<div class="bar"><div class="lab"><span>${esc(nomF(k))}</span><span class="num">${baseV ? (S.discret ? pct(part,tot) : eur(x.v)) : x.n+' '+plur(x.n,'ligne','lignes')}</span></div><div class="tr"><div class="fi" style="width:${tot?Math.max(2,part/tot*100):0}%"></div></div></div>`; }).join('');
-  };
-  const niv = [0,1,2,3,4,5].map(n => ({n, c:S.produits.filter(p=>(p.niveau||0)===n && p.actif!==false).length}));
+  const {deb,fin} = range(S.periode);
+  const per = [['jour','Jour'],['7j','7 jours'],['30j','30 jours'],['mois','Ce mois']];
+  const g = kpi(null,deb,fin);
+  const lignes = rayonsTries().map(r => ({r, k:kpi(r.id,deb,fin), d:deltaPeriode(r.id,deb,fin)}));
+  const avec = lignes.filter(x => x.k.ventes || x.k.achats || x.k.nDem || x.d);
+  const sans = lignes.length - avec.length;
+  const dT = avec.filter(x=>x.d && x.d.n).reduce((a,x)=>({inc:a.inc+x.d.inconnue, tot:a.tot+x.d.totale, v:a.v+x.d.ventes, n:a.n+x.d.n}), {inc:0,tot:0,v:0,n:0});
+  const st = stats(deb,fin);
+  const baseV = g.casse > 0;
+  const motifs = Object.entries(st.parMotif).sort((a,b)=> baseV ? b[1].v-a[1].v : b[1].n-a[1].n);
+  const totM = motifs.reduce((s,[,x])=>s+(baseV?x.v:x.n),0);
   const top = Object.entries(st.parProd).sort((a,b)=> baseV ? b[1].v-a[1].v : b[1].n-a[1].n).slice(0,5);
-  const recents = actifs().slice().sort((a,b)=> a.ts<b.ts?1:-1).slice(0,5);
+  const niv = [0,1,2,3,4,5].map(n => ({n, c:S.produits.filter(p=>(p.niveau||0)===n && p.actif!==false).length}));
+  const recents = actifs().filter(m=>m.type!=='comptage').slice().sort((a,b)=> a.ts<b.ts?1:-1).slice(0,5);
+  const aujourdhui = iso(new Date());
+  const nav = S.periode==='jour'
+    ? `<div class="navj"><button class="btn sm" onclick="A.refJour(-1)" aria-label="Jour précédent">‹</button><b>${esc(jourLong(fin))}</b><button class="btn sm" ${fin>=aujourdhui?'disabled':''} onclick="A.refJour(1)" aria-label="Jour suivant">›</button></div>`
+    : `<p class="small muted" style="margin:0 0 12px;text-align:center">Du ${esc(jCourt(deb))} au ${esc(jCourt(fin))}</p>`;
+  const pv = (a,b) => b ? pct(a,b) : '–';
 
-  return `<div class="seg" role="group" aria-label="Période" style="margin-bottom:12px">${per.map(([k,l])=>`<button aria-pressed="${S.periode===k}" onclick="A.periode('${k}')">${l}</button>`).join('')}</div>
+  return `<div class="seg" role="group" aria-label="Période" style="margin-bottom:10px">${per.map(([k,l])=>`<button aria-pressed="${S.periode===k}" onclick="A.periode('${k}')">${l}</button>`).join('')}</div>
+  ${nav}
 
   <section class="block">
-    <div class="row between"><h2>Démarque connue</h2>${tag('demarque')}</div>
-    <div class="big" style="margin-top:10px">${st.nDem ? eur(st.valDemPA) : '0'}</div>
-    <div class="muted small">au prix d’achat HT${S.discret?'':` ; ${eur(st.valDemPV)} au prix de vente`}</div>
-    <div class="small" style="margin-top:6px">${st.nDem} ${plur(st.nDem,'ligne','lignes')} de démarque${S.params.donsDansDemarque?', dons compris':''}</div>
-    ${st.sansPrix ? `<p class="warn" style="margin:10px 0 0">${st.sansPrix} ${plur(st.sansPrix,'ligne n’a','lignes n’ont')} pas de prix d’achat : complète les fiches produits pour une valorisation juste.</p>`:''}
+    <h2>Magasin, rayons frais</h2>
+    <div class="kv" style="margin-top:10px">
+      <div><div class="l">Ventes HT</div><div class="mid">${g.aChiffres ? eur(g.ventes) : '–'}</div></div>
+      <div><div class="l">Achats HT</div><div class="mid">${g.achats ? eur(g.achats) : '–'}</div><div class="small">${g.ventes ? pct(g.achats,g.ventes)+' des ventes' : ''}</div></div>
+      <div><div class="l">Casse (démarque connue)</div><div class="mid" style="color:var(--dem)">${g.ventes ? pct(g.casse,g.ventes) : eur(g.casse)}</div><div class="small">${g.ventes ? eur(g.casse)+', ' : ''}${g.nDem} ${plur(g.nDem,'ligne','lignes')}</div></div>
+      <div><div class="l">Delta (démarque inconnue)</div><div class="mid">${dT.n && dT.v ? pct(dT.inc,dT.v) : '–'}</div><div class="small">${dT.n ? eur(dT.inc) : 'deux inventaires nécessaires'}</div></div>
+    </div>
+    ${!g.aChiffres ? `<p class="note" style="margin:12px 0 0">Saisis les ventes et les achats du jour dans l’onglet Chiffres pour obtenir les pourcentages.</p>`:''}
+    ${g.sansPrix ? `<p class="warn" style="margin:10px 0 0">${g.sansPrix} ${plur(g.sansPrix,'ligne de casse n’a','lignes de casse n’ont')} pas de prix d’achat : complète les fiches produits.</p>`:''}
+    ${g.casseSysSaisie ? `<p class="small" style="margin:10px 0 0">Casse déclarée dans le système : ${eur(g.casseSys)}. Écart avec la casse constatée : ${eur(g.casse-g.casseSys)}${Math.abs(g.casse-g.casseSys)>0.005 ? (g.casse>g.casseSys?' (casse non déclarée, elle finira en démarque inconnue)':' (casse déclarée non saisie ici)') : ''}.</p>`:''}
   </section>
 
-  <section class="block flat">
-    <h3>Démarque inconnue</h3>
-    <p class="small muted" style="margin:6px 0 0">Elle sera mesurée par les contrôles ponctuels (stock compté contre stock théorique), à partir de la version 2.</p>
+  <section class="block"><h3>Par rayon</h3><p class="tiny muted" style="margin:4px 0 6px">Touche un rayon pour le détail et le calcul du delta.</p>
+    ${avec.length ? avec.map(x => `<button class="item" style="padding:12px 0" onclick="A.rayon('${esc(x.r.id)}')"><span class="grow"><span class="nm">${esc(x.r.nom)}</span><span class="small muted">Ventes ${x.k.aChiffres?eur(x.k.ventes):'–'}${x.k.ventes&&x.k.achats?', achats '+pct(x.k.achats,x.k.ventes):''}</span></span>
+      <span class="kpis"><span><b style="color:var(--dem)">${x.k.ventes ? pct(x.k.casse,x.k.ventes) : (x.k.nDem ? eur(x.k.casse) : '–')}</b><small>casse</small></span><span><b>${x.d && x.d.n && x.d.ventes ? pct(x.d.inconnue,x.d.ventes) : '–'}</b><small>delta</small></span></span></button>`).join('')
+      : '<p class="small muted">Aucune donnée sur la période.</p>'}
+    ${sans && avec.length ? `<p class="tiny muted" style="margin:8px 0 0">${sans} ${plur(sans,'rayon','rayons')} sans donnée sur la période.</p>`:''}
   </section>
 
-  <section class="block"><h3>Par rayon</h3>${barres(st.parRayon, k => k==='_' ? 'Sans rayon' : (rayon(k)||{nom:'Rayon supprimé'}).nom)}</section>
-  <section class="block"><h3>Par motif</h3>${barres(st.parMotif, motifNom)}</section>
+  <section class="block"><h3>Casse en % des ventes, 14 derniers jours</h3>${graphe(null)}</section>
+
+  <section class="block"><div class="row between"><h3>Casse par motif</h3>${tag('demarque')}</div>
+    ${motifs.length ? motifs.map(([k,x]) => { const part = baseV ? x.v : x.n;
+      return `<div class="bar"><div class="lab"><span>${esc(motifNom(k))}</span><span class="num">${baseV ? (S.discret ? pct(part,totM) : eur(x.v)) : x.n+' '+plur(x.n,'ligne','lignes')}</span></div><div class="tr"><div class="fi" style="width:${totM?Math.max(2,part/totM*100):0}%"></div></div></div>`; }).join('')
+      : '<p class="small muted">Aucune casse saisie sur la période.</p>'}
+  </section>
+
+  ${top.length ? `<section class="block"><h3>Produits les plus démarqués</h3><div style="margin-top:6px">${top.map(([id,x])=>`<button class="item" style="padding:10px 0" onclick="A.fiche('${esc(id)}')"><span class="grow"><span class="nm">${esc((prod(id)||x).nom)}</span></span><span class="num">${baseV?eur(x.v):x.n+' '+plur(x.n,'ligne','lignes')}</span></button>`).join('')}</div></section>`:''}
 
   <section class="block">
     <h3>Autres sorties</h3>
     <div class="kv" style="margin-top:10px">
-      <div><div class="l">Dons${S.params.donsDansDemarque?' (dans la démarque)':''}</div><div class="mid">${st.dons.length}</div>${st.dons.length?`<div class="small">${eur(st.dons.reduce((s,m)=>s+(num(m.valPA)||0),0))}</div>`:''}</div>
-      <div><div class="l">Retours fournisseurs</div><div class="mid">${st.retours.length}</div>${st.retours.length?`<div class="small">${eur(st.retours.reduce((s,m)=>s+(num(m.valPA)||0),0))}</div>`:''}</div>
+      <div><div class="l">Dons${S.params.donsDansDemarque?' (dans la casse)':''}</div><div class="mid">${st.dons.length}</div>${st.dons.length?`<div class="small">${eur(vNum(st.dons,'valPA'))}</div>`:''}</div>
+      <div><div class="l">Retours fournisseurs</div><div class="mid">${st.retours.length}</div>${st.retours.length?`<div class="small">${eur(vNum(st.retours,'valPA'))}</div>`:''}</div>
     </div>
   </section>
 
@@ -509,10 +612,162 @@ function vAccueil(){
     <div class="lvllist">${niv.map(x=>`<div class="lvlitem ${x.c?'':'zero'}">${lvl(x.n)}<span class="grow">${x.n}. ${esc(NIVEAUX[x.n].nom)}</span><b>${x.c}</b></div>`).join('')}</div>
   </section>
 
-  ${top.length ? `<section class="block"><h3>Produits les plus démarqués</h3><div style="margin-top:8px">${top.map(([id,x])=>`<button class="item" style="padding:10px 0" onclick="A.fiche('${esc(id)}')"><span class="grow"><span class="nm">${esc((prod(id)||x).nom)}</span></span><span class="num">${baseV?eur(x.v):x.n+' '+plur(x.n,'ligne','lignes')}</span></button>`).join('')}</div></section>`:''}
-
   <section class="block"><div class="row between"><h3>Dernières saisies</h3><button class="btn sm" onclick="A.vue('journal')">Journal</button></div>
   ${recents.length ? `<div style="margin-top:6px">${recents.map(ligneMvt).join('')}</div>` : `<div class="empty">Aucune saisie pour l’instant.<br><button class="btn primary" onclick="A.vue('scanner')">Scanner un produit</button></div>`}</section>`;
+}
+
+// Histogramme de la casse en % des ventes (14 jours).
+function graphe(rid){
+  const f = iso(new Date()), js = jours(decale(f,-13), f);
+  const pts = js.map(j => { const k = kpi(rid,j,j); return {j, v: k.ventes ? k.casse/k.ventes*100 : null}; });
+  if (!pts.some(p => p.v!==null)) return '<p class="small muted" style="margin:6px 0 0">Le graphique apparaît dès que les ventes quotidiennes sont saisies.</p>';
+  const max = Math.max(0.5, ...pts.map(p => p.v||0));
+  const W = 336, H = 130, bw = W/14;
+  return `<svg viewBox="0 0 ${W} ${H+34}" width="100%" role="img" aria-label="Casse en pourcentage des ventes sur 14 jours" style="margin-top:8px;overflow:visible">
+  ${pts.map((p,i) => { const h = p.v===null ? 0 : Math.max(2, p.v/max*H); const x = i*bw + 3;
+    return `<g><title>${esc(jCourt(p.j))} : ${p.v===null?'pas de ventes saisies':fmtN(p.v,1)+' %'}</title>
+    ${p.v===null ? `<rect x="${x}" y="${H-2}" width="${bw-6}" height="2" fill="var(--line)"/>` : `<rect x="${x}" y="${H-h}" width="${bw-6}" height="${h}" rx="2" fill="var(--dem)"/>`}
+    <text x="${x+(bw-6)/2}" y="${H+14}" text-anchor="middle" font-size="10" fill="var(--muted)">${new Date(p.j+'T12:00:00').getDate()}</text>
+    ${p.v!==null && (i===13 || p.v===max) ? `<text x="${x+(bw-6)/2}" y="${H-h-5}" text-anchor="middle" font-size="10.5" font-weight="600" fill="var(--ink)">${fmtN(p.v,1)}</text>`:''}</g>`; }).join('')}
+  <text x="0" y="${H+30}" font-size="10" fill="var(--muted)">Max ${fmtN(max,1)} %</text></svg>`;
+}
+
+/* ---------- Détail d'un rayon ---------- */
+function sheetRayon(){
+  const rid = S.sheet.rid, r = rayon(rid); if (!r) return '';
+  const d = dernierDelta(rid), iv = invsRayon(rid);
+  const f = iso(new Date()), js = jours(decale(f,-13), f).reverse();
+  const tm = num(r.tauxMarque);
+  const deb30 = decale(f,-29);
+  const st = actifs().filter(m => estDemarque(m) && m.rayonId===rid && m.jour>=deb30);
+  const parProd = {}; st.forEach(m => { (parProd[m.produitId] = parProd[m.produitId] || {v:0,n:0,nom:m.produitNom}); parProd[m.produitId].v += num(m.valPA)||0; parProd[m.produitId].n++; });
+  const top = Object.entries(parProd).sort((a,b)=>b[1].v-a[1].v||b[1].n-a[1].n).slice(0,8);
+  const ligne = (l,v,cls) => `<tr class="${cls||''}"><td>${l}</td><td class="num">${v}</td></tr>`;
+  return `<div class="grip"></div>
+  <div class="sh-title">${esc(r.nom)}</div>
+  <p class="small muted" style="margin:4px 0 12px">Taux de marque théorique : ${isFinite(tm) ? fmtN(tm,1)+' %' : 'non renseigné'}</p>
+  ${!isFinite(tm) ? `<p class="warn">Sans taux de marque, le delta ne peut pas être calculé. Renseigne-le dans Plus, Réglages, Rayons.</p>`:''}
+
+  <h3 style="margin:10px 0 6px">Dernier delta entre inventaires</h3>
+  ${d ? `<div class="scrollx"><table class="tbl">
+    ${ligne('Stock début, '+esc(jCourt(d.a.jour))+' au soir', eur(num(d.a.valeurPA)))}
+    ${ligne('+ Achats', eur(d.k.achats))}
+    ${ligne('− Stock fin, '+esc(jCourt(d.b.jour))+' au soir', eur(num(d.b.valeurPA)))}
+    ${ligne('= Sorties réelles au coût', eur(d.sorties),'tot')}
+    ${ligne('Ventes HT', eur(d.k.ventes))}
+    ${ligne('Coût des ventes', isFinite(d.coutVentes)?eur(d.coutVentes):'–')}
+    ${ligne('Démarque totale', isFinite(d.totale)?eur(d.totale)+(d.k.ventes?' ('+pct(d.totale,d.k.ventes)+')':''):'–','tot')}
+    ${ligne('dont casse saisie', eur(d.k.casse)+(d.k.ventes?' ('+pct(d.k.casse,d.k.ventes)+')':''))}
+    ${ligne('<b>Delta : démarque inconnue</b>', isFinite(d.inconnue)?'<b>'+eur(d.inconnue)+(d.k.ventes?' ('+pct(d.inconnue,d.k.ventes)+')':'')+'</b>':'–','tot')}
+    ${ligne('Taux de marque réel', isFinite(d.tmReel)?fmtN(d.tmReel*100,1)+' %':'–')}
+  </table></div>
+  <p class="tiny muted" style="margin:6px 0 0">Période : ${d.nbJours} ${plur(d.nbJours,'jour','jours')}, du ${esc(jCourt(d.deb))} au ${esc(jCourt(d.fin))}</p>
+  ${d.manquants ? `<p class="warn" style="margin:8px 0 0">${d.manquants} ${plur(d.manquants,'jour sans ventes saisies','jours sans ventes saisies')} dans la période : le delta est faussé tant qu’ils ne sont pas complétés.</p>`:''}`
+  : `<p class="small muted">${iv.length ? 'Un seul inventaire enregistré : le delta apparaîtra au prochain.' : 'Aucun inventaire pour ce rayon.'}</p>`}
+
+  <h3 style="margin:18px 0 6px">14 derniers jours</h3>
+  <div class="scrollx"><table class="tbl"><tr><th>Jour</th><th>Ventes</th><th>Achats</th><th>Casse</th><th>Casse %</th></tr>
+  ${js.map(j => { const k = kpi(rid,j,j); return `<tr><td>${esc(jCourt(j))}</td><td class="num">${k.aChiffres?eur(k.ventes):'–'}</td><td class="num">${k.achats?eur(k.achats):'–'}</td><td class="num">${k.nDem?eur(k.casse):'–'}</td><td class="num">${k.ventes&&k.nDem?pct(k.casse,k.ventes):'–'}</td></tr>`; }).join('')}
+  </table></div>
+  <h3 style="margin:18px 0 6px">Casse en % des ventes</h3>${graphe(rid)}
+
+  ${top.length ? `<h3 style="margin:18px 0 6px">Produits les plus démarqués, 30 jours</h3>${top.map(([id,x])=>`<button class="item" style="padding:10px 0" onclick="A.fiche('${esc(id)}')"><span class="grow"><span class="nm">${esc((prod(id)||x).nom)}</span><span class="small muted">${x.n} ${plur(x.n,'ligne','lignes')}</span></span><span class="num">${eur(x.v)}</span></button>`).join('')}`:''}
+
+  <div class="grid2" style="margin-top:16px"><button class="btn" onclick="A.allerChiffres()">Saisir les chiffres</button><button class="btn" onclick="A.allerInventaire('${esc(rid)}')">Faire un inventaire</button></div>
+  <button class="btn block100" style="margin-top:8px" onclick="A.fermer()">Fermer</button>`;
+}
+
+/* ---------- Chiffres du jour ---------- */
+function vChiffres(){
+  const j = S.cj, auj = iso(new Date());
+  const rs = rayonsTries();
+  const v = x => esc(x==null || x==='' ? '' : String(x).replace('.',','));
+  const tot = kpi(null,j,j);
+  return `<h2>Chiffres du jour</h2>
+  <p class="small muted" style="margin:4px 0 12px">Ventes et achats HT par rayon, repris des éditions du magasin. La casse est calculée à partir de tes saisies de démarque.</p>
+  <div class="navj"><button class="btn sm" onclick="A.cj(-1)" aria-label="Jour précédent">‹</button><b>${esc(jourLong(j))}</b><button class="btn sm" ${j>=auj?'disabled':''} onclick="A.cj(1)" aria-label="Jour suivant">›</button></div>
+  ${rs.map(r => { const c = S.chiffres.find(x => x.id===j+'_'+r.id) || {}; const k = kpi(r.id,j,j);
+    return `<section class="block"><div class="row between"><h3>${esc(r.nom)}</h3><span class="small ${k.nDem?'':'muted'}">Casse ${k.nDem ? eur(k.casse)+(k.ventes?', '+pct(k.casse,k.ventes):'') : 'aucune'}</span></div>
+    <div class="grid2" style="margin-top:8px">
+      <label class="f"><span>Ventes HT (€)</span><input type="text" inputmode="decimal" value="${v(c.ventesHT)}" onchange="A.chiffre('${esc(r.id)}','ventesHT',this.value)"></label>
+      <label class="f"><span>Achats HT (€)</span><input type="text" inputmode="decimal" value="${v(c.achatsHT)}" onchange="A.chiffre('${esc(r.id)}','achatsHT',this.value)"></label>
+    </div>
+    <label class="f" style="margin-bottom:0"><span>Casse déclarée dans le système (€, facultatif)</span><input type="text" inputmode="decimal" value="${v(c.casseSysteme)}" onchange="A.chiffre('${esc(r.id)}','casseSysteme',this.value)"></label>
+    </section>`; }).join('')}
+  <section class="block"><h3>Total du jour</h3>
+    <div class="kv" style="margin-top:8px">
+      <div><div class="l">Ventes HT</div><div class="mid">${eur(tot.ventes)}</div></div>
+      <div><div class="l">Achats HT</div><div class="mid">${eur(tot.achats)}</div></div>
+      <div><div class="l">Casse</div><div class="mid">${tot.ventes?pct(tot.casse,tot.ventes):eur(tot.casse)}</div></div>
+    </div></section>
+  <p class="tiny muted">Les rayons suivis se choisissent dans Plus, Réglages, Rayons.</p>`;
+}
+
+/* ---------- Inventaire ---------- */
+function vInventaire(){
+  if (S.inv) return vInventaireEnCours();
+  const auj = iso(new Date());
+  const hist = S.inventaires.slice().sort((a,b)=> a.jour===b.jour ? (a.ts<b.ts?1:-1) : (a.jour<b.jour?1:-1)).slice(0,30);
+  return `<h2>Inventaire</h2>
+  <p class="small muted" style="margin:4px 0 12px">Stock réel, valorisé au prix d’achat, en fin de journée. Deux inventaires successifs d’un rayon donnent sa démarque inconnue sur la période.</p>
+  <section class="block">
+    <h3>Nouvel inventaire</h3>
+    <label class="f" style="margin-top:10px"><span>Rayon</span><select id="inv_r"><option value="">Choisir…</option>${rayonsTries().map(r=>`<option value="${esc(r.id)}" ${S.invRayon===r.id?'selected':''}>${esc(r.nom)}</option>`).join('')}</select></label>
+    <label class="f"><span>Jour (stock du soir)</span><input type="date" id="inv_j" value="${auj}" max="${auj}"></label>
+    <button class="btn primary block100" onclick="A.invDebut('produits')">Compter produit par produit</button>
+    <button class="btn block100" style="margin-top:8px" onclick="A.invDebut('valeur')">Saisir une valeur globale</button>
+    <p class="tiny muted" style="margin:10px 0 0">Produit par produit : resserre comptée et rayon estimé, la méthode précise ; elle met aussi à jour le stock de chaque produit. Valeur globale : montant repris d’un inventaire du magasin.</p>
+  </section>
+  <h3 style="margin:16px 2px 8px">Inventaires enregistrés</h3>
+  ${hist.length ? `<div class="list">${hist.map(i => `<div class="item" style="cursor:default;${i.annule?'opacity:.5':''}"><span class="tag t-comptage">${i.methode==='produits'?'Comptage':'Valeur'}</span><span class="grow"><span class="nm">${esc((rayon(i.rayonId)||{nom:'Rayon supprimé'}).nom)}</span><span class="small muted">${esc(jourLong(i.jour))}${i.methode==='produits'?', '+(i.nbComptes||0)+' '+plur(i.nbComptes||0,'produit','produits'):''}${i.annule?', annulé':''}</span></span><span class="small num">${eur(num(i.valeurPA))}</span>${i.annule?'':`<button class="btn sm" onclick="A.invAnnuler('${esc(i.id)}')">Annuler</button>`}</div>`).join('')}</div>`
+  : '<div class="empty">Aucun inventaire pour l’instant.</div>'}`;
+}
+function invTotal(){
+  const v = S.inv; let val = 0, n = 0, sansPrix = 0;
+  S.produits.filter(p => p.rayonId===v.rayonId && p.actif!==false).forEach(p => {
+    const l = v.lignes[p.id]; if (!l) return;
+    const q = (isFinite(num(l.res))?num(l.res):0) + (isFinite(num(l.ray))?num(l.ray):0);
+    if ((l.res||'')!=='' || (l.ray||'')!=='') n++;
+    if (q>0){ if (isFinite(num(p.pa))) val += q*num(p.pa); else sansPrix++; }
+  });
+  return {val, n, sansPrix};
+}
+function vInventaireEnCours(){
+  const v = S.inv, r = rayon(v.rayonId) || {nom:'Rayon supprimé'};
+  const titre = `<div class="row between"><div><h2>Inventaire ${esc(r.nom)}</h2><p class="small muted" style="margin:2px 0 0">Stock du soir, ${esc(jourLong(v.jour).toLowerCase())}</p></div></div>`;
+  if (v.mode==='valeur') return `${titre}
+    <section class="block" style="margin-top:12px">
+      <label class="f"><span>Valeur du stock au prix d’achat HT (€)</span><input type="text" inputmode="decimal" id="inv_val" value="${esc(v.valeur||'')}" oninput="A.invChamp('valeur',this.value)"></label>
+      <label class="f"><span>Origine du chiffre (facultatif)</span><input type="text" id="inv_note" value="${esc(v.note||'')}" oninput="A.invChamp('note',this.value)" placeholder="Ex. : inventaire magasin du mois"></label>
+      <button class="btn primary block100" onclick="A.invValider()">Enregistrer l’inventaire</button>
+      <button class="btn danger block100" style="margin-top:8px" onclick="A.invAbandon()">Abandonner</button>
+    </section>`;
+  const q = S.invQ.trim().toLowerCase();
+  const ps = S.produits.filter(p => p.rayonId===v.rayonId && p.actif!==false)
+    .sort((a,b)=> (a.famille||'').localeCompare(b.famille||'','fr') || (a.nom||'').localeCompare(b.nom||'','fr'));
+  const vis = q ? ps.filter(p => (p.nom||'').toLowerCase().includes(q) || (p.codes||[]).some(c=>c.includes(q)) || (p.plu||'')===q) : ps;
+  const t = invTotal();
+  const val = x => esc(x==null ? '' : x);
+  return `${titre}
+  <div class="invhead"><div class="row between"><span class="small" id="inv_tot">${invResume(t, ps.length)}</span></div>
+  <input type="search" placeholder="Chercher un produit" value="${esc(S.invQ)}" oninput="A.invQ(this.value)" style="margin-top:8px"></div>
+  ${ps.length ? `<div class="list" style="padding:0 14px"><div class="invrow" style="padding:8px 0"><span class="grow small muted">Produit</span><span class="small muted" style="width:78px;text-align:center">Resserre</span><span class="small muted" style="width:78px;text-align:center">Rayon</span></div>
+  ${vis.map(p => { const l = v.lignes[p.id] || {};
+    return `<div class="invrow"><div class="grow"><div class="nm">${esc(p.nom)}</div><div class="tiny muted">${esc(UNITES[p.uniteVente]||'')}${isFinite(num(p.pa))?'':', sans prix d’achat'}</div></div>
+    <input type="text" inputmode="decimal" aria-label="Resserre, ${esc(p.nom)}" value="${val(l.res)}" oninput="A.invLigne('${esc(p.id)}','res',this.value)">
+    <input type="text" inputmode="decimal" aria-label="Rayon, ${esc(p.nom)}" value="${val(l.ray)}" oninput="A.invLigne('${esc(p.id)}','ray',this.value)"></div>`; }).join('')}</div>`
+  : `<div class="empty">Aucun produit dans ce rayon. Crée les fiches (ou scanne les produits) pour compter produit par produit, ou saisis une valeur globale.</div>`}
+  <button class="btn block100" style="margin-top:12px" onclick="A.invNouveauProduit()">Ajouter un produit à ce rayon</button>
+  <button class="btn primary block100" style="margin-top:8px" onclick="A.invValider()">Valider l’inventaire</button>
+  <button class="btn danger block100" style="margin-top:8px" onclick="A.invAbandon()">Abandonner</button>
+  <p class="tiny muted" style="margin-top:10px">Les saisies sont gardées sur l’appareil tant que l’inventaire n’est pas validé, même si tu quittes l’appli.</p>`;
+}
+function invResume(t, nb){ return `${t.n} / ${nb} ${plur(nb,'produit','produits')} renseignés, valeur ${eur(t.val)}${t.sansPrix?`, ${t.sansPrix} sans prix`:''}`; }
+
+/* ---------- Plus ---------- */
+function vPlus(){
+  const el = [['produits','Produits','Fiches, codes-barres, unités, prix et niveaux de suivi'],['journal','Journal','Toutes les saisies, avec annulation'],['reglages','Réglages','Rayons et taux de marque, motifs, étiquettes, sauvegarde']];
+  return `<h2 style="margin-bottom:10px">Plus</h2><div class="list">${el.map(([k,t,d])=>`<button class="item" onclick="A.vue('${k}')"><span class="grow"><span class="nm">${t}</span><span class="small muted">${d}</span></span><span aria-hidden="true" class="muted">›</span></button>`).join('')}</div>`;
 }
 
 function ligneMvt(m){
@@ -795,13 +1050,14 @@ function sauverFiche(){
 /* ---------- Journal ---------- */
 function vJournal(){
   const f = S.jf, deb = debutPeriode(f.periode), ann = annules();
-  const ms = S.mouvements.filter(m => m.jour>=deb && (!f.type || m.type===f.type) && (!f.rayon || m.rayonId===f.rayon))
+  const typeOk = m => f.type ? m.type===f.type : m.type!=='comptage';
+  const ms = S.mouvements.filter(m => m.jour>=deb && typeOk(m) && (!f.rayon || m.rayonId===f.rayon))
     .sort((a,b)=> a.ts<b.ts?1:-1);
   const parJour = {}; ms.forEach(m => (parJour[m.jour] = parJour[m.jour]||[]).push(m));
   return `<h2 style="margin-bottom:10px">Journal</h2>
   <div class="seg" role="group" aria-label="Période" style="margin-bottom:10px">${[['jour','Aujourd’hui'],['7j','7 jours'],['30j','30 jours'],['mois','Ce mois']].map(([k,l])=>`<button aria-pressed="${f.periode===k}" onclick="A.jf('periode','${k}')">${l}</button>`).join('')}</div>
   <div class="grid2">
-    <select onchange="A.jf('type',this.value)" aria-label="Type"><option value="">Tous les types</option>${[...ACTIONS_V1,'annulation'].map(t=>`<option value="${t}" ${f.type===t?'selected':''}>${esc(TYPES[t].nom)}</option>`).join('')}</select>
+    <select onchange="A.jf('type',this.value)" aria-label="Type"><option value="">Tous les types</option>${[...ACTIONS_V1,'comptage','annulation'].map(t=>`<option value="${t}" ${f.type===t?'selected':''}>${esc(TYPES[t].nom)}</option>`).join('')}</select>
     <select onchange="A.jf('rayon',this.value)" aria-label="Rayon"><option value="">Tous les rayons</option>${rayonsTries(true).map(r=>`<option value="${esc(r.id)}" ${f.rayon===r.id?'selected':''}>${esc(r.nom)}</option>`).join('')}</select>
   </div>
   ${ms.length ? Object.keys(parJour).map(j => `<div class="dayhead">${esc(jourLong(j))}</div><div class="list">${parJour[j].map(m => {
@@ -811,7 +1067,7 @@ function vJournal(){
     return `<div class="item" style="cursor:default;${barre?'opacity:.5':''}">${tag(m.type)}<span class="grow"><span class="nm" style="${barre?'text-decoration:line-through':''}">${esc(m.produitNom)}</span>
     <span class="small muted">${esc(fmtQ(num(m.qte),m.unite))}${extra?', '+esc(extra):''}${m.note?', '+esc(m.note):''}, ${heure(m.ts)}${barre?', annulée':''}</span></span>
     <span class="small num">${m.type!=='annulation'?valeur:''}</span>
-    ${!barre && m.type!=='annulation' ? `<button class="btn sm" onclick="A.annuler('${esc(m.id)}')" aria-label="Annuler cette saisie">Annuler</button>`:''}</div>`; }).join('')}</div>`).join('')
+    ${!barre && m.type!=='annulation' && m.type!=='comptage' ? `<button class="btn sm" onclick="A.annuler('${esc(m.id)}')" aria-label="Annuler cette saisie">Annuler</button>`:''}</div>`; }).join('')}</div>`).join('')
   : '<div class="empty">Aucune saisie sur cette période.</div>'}
   <p class="tiny muted" style="margin-top:14px">Une saisie n’est jamais effacée : l’annuler ajoute une ligne d’annulation, pour garder la trace complète.</p>`;
 }
@@ -835,13 +1091,14 @@ function vReglages(){
   </section>
 
   <section class="block"><div class="row between"><h3>Rayons</h3><button class="btn sm" onclick="A.ajoutRayon()">Ajouter</button></div>
-    <p class="tiny muted" style="margin:4px 0 10px">Décoche « Actif » pour masquer un rayon que tu ne suis pas. La tolérance s’applique aux contrôles de stock.</p>
+    <p class="tiny muted" style="margin:4px 0 10px">Décoche « Actif » pour masquer un rayon que tu ne suis pas. Le taux de marque théorique (marge / ventes HT) sert au calcul du delta ; la tolérance, aux contrôles de stock.</p>
     ${rayonsTries(true).map((r,i,a)=>`<div style="border-top:1px solid var(--line);padding:10px 0">
       <div class="row"><input type="text" value="${esc(r.nom)}" onchange="A.majRayon('${esc(r.id)}','nom',this.value)" aria-label="Nom du rayon">
       <button class="btn sm" ${i===0?'disabled':''} onclick="A.ordreRayon('${esc(r.id)}',-1)" aria-label="Monter">↑</button><button class="btn sm" ${i===a.length-1?'disabled':''} onclick="A.ordreRayon('${esc(r.id)}',1)" aria-label="Descendre">↓</button></div>
       <div class="row wrap" style="margin-top:6px;gap:14px">
         <label class="check small"><input type="checkbox" ${r.actif!==false?'checked':''} onchange="A.majRayon('${esc(r.id)}','actif',this.checked)"> Actif</label>
         <label class="check small"><input type="checkbox" ${r.transformation?'checked':''} onchange="A.majRayon('${esc(r.id)}','transformation',this.checked)"> Transformation</label>
+        <label class="row small">Taux de marque <input type="text" inputmode="decimal" style="width:70px;min-height:38px" value="${esc(r.tauxMarque==null?'':r.tauxMarque)}" placeholder="?" onchange="A.majRayon('${esc(r.id)}','tauxMarque',this.value)"> %</label>
         <label class="row small">Tolérance <input type="text" inputmode="decimal" style="width:70px;min-height:38px" value="${esc(r.tolerance==null?'':r.tolerance)}" placeholder="${esc(String(P.toleranceDefaut))}" onchange="A.majRayon('${esc(r.id)}','tolerance',this.value)"> %</label>
       </div>
       <input type="text" style="margin-top:6px" value="${esc(r.fonctionnement||'')}" placeholder="Fonctionnement du rayon (unités, codes, freinte, risques…)" onchange="A.majRayon('${esc(r.id)}','fonctionnement',this.value)">
@@ -876,9 +1133,10 @@ function vReglages(){
     <div class="row wrap" style="margin-top:8px">
       <button class="btn sm" onclick="A.exportJSON()">Exporter tout (JSON)</button>
       <button class="btn sm" onclick="A.exportCSV()">Exporter les saisies (CSV)</button>
+      <button class="btn sm" onclick="A.exportChiffres()">Exporter les chiffres (CSV)</button>
       <label class="btn sm">Importer un JSON<input type="file" accept="application/json,.json" style="display:none" onchange="A.importJSON(this.files[0])"></label>
     </div>
-    <p class="tiny muted" style="margin:8px 0 0">L’import ajoute ou met à jour les fiches, rayons et saisies du fichier, sans rien supprimer. Il sert aussi à passer du mode local au mode synchronisé.</p>
+    <p class="tiny muted" style="margin:8px 0 0">L’import ajoute ou met à jour les fiches, rayons, saisies, chiffres et inventaires du fichier, sans rien supprimer. Il sert aussi à passer du mode local au mode synchronisé.</p>
   </section>
 
   <section class="block"><h3>Compte</h3>
@@ -893,7 +1151,7 @@ function vReglages(){
 function renderSheet(){
   const sh = $('#sheet'), veil = $('#veil');
   if (!S.sheet){ sh.classList.remove('open'); veil.classList.remove('open'); return; }
-  const html = S.sheet.kind==='saisie' ? sheetSaisie() : sheetFiche();
+  const html = S.sheet.kind==='saisie' ? sheetSaisie() : (S.sheet.kind==='rayon' ? sheetRayon() : sheetFiche());
   const y = sh.scrollTop;
   sh.innerHTML = html; sh.scrollTop = y;
   sh.classList.add('open'); veil.classList.add('open');
@@ -911,8 +1169,86 @@ function telecharger(nom, contenu, type){
    ACTIONS (appelées depuis l'interface)
    ============================================================ */
 window.A = {
-  vue(v){ if (S.vue==='scanner' && v!=='scanner') arreterCamera(); if (v==='scanner'){ S.camErr=''; S.camPause=false; } S.vue = v; S.sheet = null; window.scrollTo(0,0); render(); },
-  periode(p){ S.periode = p; render(); },
+  vue(v){ if (S.vue==='scanner' && v!=='scanner') arreterCamera(); if (v==='scanner'){ S.camErr=''; S.camPause=false; } if (document.activeElement) document.activeElement.blur(); S.vue = v; S.sheet = null; window.scrollTo(0,0); render(); },
+  periode(p){ S.periode = p; if (p==='jour') S.refJour = iso(new Date()); render(); },
+  refJour(d){ const n = decale(S.refJour,d); if (n<=iso(new Date())) S.refJour = n; render(); },
+  rayon(id){ S.sheet = {kind:'rayon', rid:id}; render(); },
+  allerChiffres(){ A.vue('chiffres'); },
+  allerInventaire(id){ S.invRayon = id; A.vue('inventaire'); },
+  cj(d){ const n = decale(S.cj,d); if (n<=iso(new Date())) S.cj = n; if (document.activeElement) document.activeElement.blur(); render(); },
+  chiffre(rid,k,v){
+    const id = S.cj+'_'+rid, t = String(v).trim(), x = num(t);
+    if (t!=='' && !isFinite(x)){ toast('Montant non reconnu : saisis un nombre, par exemple 1234,50.'); return; }
+    const c = clone(S.chiffres.find(y=>y.id===id) || {id, jour:S.cj, rayonId:rid});
+    c[k] = t==='' ? null : r2(x); c.majLe = new Date().toISOString(); c.auteur = S.user ? S.user.uid : 'local';
+    Store.put('chiffres', c);
+  },
+  invDebut(mode){
+    const rid = ($('#inv_r')||{}).value, j = ($('#inv_j')||{}).value || iso(new Date());
+    if (!rid){ toast('Choisis le rayon à inventorier.'); return; }
+    if (j > iso(new Date())){ toast('Un inventaire ne peut pas être daté dans le futur.'); return; }
+    S.invRayon = rid; S.invQ = '';
+    S.inv = {rayonId:rid, jour:j, mode, lignes:{}, valeur:'', note:'', debut:new Date().toISOString()};
+    ls.set('stocks-inv-encours', S.inv); window.scrollTo(0,0); render();
+  },
+  invLigne(pid,k,v){
+    if (!S.inv) return;
+    (S.inv.lignes[pid] = S.inv.lignes[pid] || {})[k] = v.trim();
+    ls.set('stocks-inv-encours', S.inv);
+    const e = $('#inv_tot'); if (e) e.textContent = invResume(invTotal(), S.produits.filter(p=>p.rayonId===S.inv.rayonId && p.actif!==false).length);
+  },
+  invChamp(k,v){ if (!S.inv) return; S.inv[k] = v; ls.set('stocks-inv-encours', S.inv); },
+  invQ(v){ S.invQ = v; if (document.activeElement) { const a = document.activeElement; a.blur(); render(); const e = document.querySelector('.invhead input[type=search]'); if (e){ e.focus(); e.setSelectionRange(v.length,v.length); } } },
+  invNouveauProduit(){ ouvrirFiche(null, {rayonId:S.inv ? S.inv.rayonId : ''}); },
+  invAbandon(){ if (!confirm('Abandonner cet inventaire ? Les quantités saisies seront perdues.')) return; S.inv = null; ls.set('stocks-inv-encours', null); render(); },
+  invValider(){
+    const v = S.inv; if (!v) return;
+    const now = new Date(), auteur = S.user ? S.user.uid : 'local';
+    const tsJour = new Date(v.jour+'T23:59:00').toISOString();
+    const base = {id:uid(), jour:v.jour, ts:now.toISOString(), rayonId:v.rayonId, methode:v.mode, auteur, annule:false, version:VERSION};
+    if (v.mode==='valeur'){
+      const x = num(v.valeur);
+      if (!isFinite(x) || x<0){ toast('Saisis la valeur du stock, par exemple 1850,00.'); return; }
+      Store.put('inventaires', Object.assign(base, {valeurPA:r2(x), note:(v.note||'').trim()}));
+    } else {
+      const ps = S.produits.filter(p => p.rayonId===v.rayonId && p.actif!==false);
+      if (!ps.length){ toast('Aucun produit à compter dans ce rayon.'); return; }
+      const bad = Object.values(v.lignes).some(l => ['res','ray'].some(k => (l[k]||'')!=='' && !(num(l[k])>=0)));
+      if (bad){ toast('Une quantité n’est pas un nombre positif : corrige-la avant de valider.'); return; }
+      const vides = ps.filter(p => { const l = v.lignes[p.id]; return !l || ((l.res||'')==='' && (l.ray||'')===''); });
+      if (vides.length && !confirm(`${vides.length} ${plur(vides.length,'produit non renseigné sera compté','produits non renseignés seront comptés')} à zéro. Valider l’inventaire ?`)) return;
+      const lignes = ps.map(p => { const l = v.lignes[p.id] || {}; const res = isFinite(num(l.res)) ? num(l.res) : 0, ray = isFinite(num(l.ray)) ? num(l.ray) : 0;
+        const q = r3(res+ray), pa = num(p.pa);
+        return {produitId:p.id, nom:p.nom, unite:p.uniteVente||'unite', resserre:r3(res), rayon:r3(ray), qte:q, pa:isFinite(pa)?pa:null, valPA:isFinite(pa)?r2(q*pa):null}; });
+      const sansPrix = lignes.filter(l => l.qte>0 && l.pa===null).length;
+      if (sansPrix && !confirm(`${sansPrix} ${plur(sansPrix,'produit compté n’a','produits comptés n’ont')} pas de prix d’achat : ${plur(sansPrix,'sa valeur','leur valeur')} ne sera pas incluse. Continuer ?`)) return;
+      const inv = Object.assign(base, {valeurPA:r2(lignes.reduce((s,l)=>s+(l.valPA||0),0)), nbComptes:ps.length-vides.length, nbProduits:ps.length, sansPrix, lignes});
+      Store.put('inventaires', inv);
+      lignes.forEach(l => Store.put('mouvements', {id:uid(), ts:tsJour, jour:v.jour, type:'comptage', sens:0, produitId:l.produitId, produitNom:l.nom, rayonId:v.rayonId,
+        qte:l.qte, unite:l.unite, pa:l.pa, valPA:l.valPA, detail:{resserre:l.resserre, rayon:l.rayon}, inventaireId:inv.id, motif:null, note:'', source:'inventaire', auteur, version:VERSION}));
+    }
+    const rid = v.rayonId;
+    S.inv = null; ls.set('stocks-inv-encours', null);
+    toast('Inventaire enregistré');
+    S.sheet = {kind:'rayon', rid}; render();
+  },
+  invAnnuler(id){
+    const i = S.inventaires.find(x=>x.id===id); if (!i) return;
+    if (!confirm(`Annuler l’inventaire ${(rayon(i.rayonId)||{nom:''}).nom} du ${jCourt(i.jour)} ?`)) return;
+    Store.put('inventaires', Object.assign(clone(i), {annule:true, annuleLe:new Date().toISOString()}));
+    const now = new Date();
+    S.mouvements.filter(m => m.inventaireId===id && m.type==='comptage').forEach(m => Store.put('mouvements', {id:uid(), ts:now.toISOString(), jour:iso(now), type:'annulation', sens:0, lienId:m.id,
+      produitId:m.produitId, produitNom:m.produitNom, rayonId:m.rayonId, qte:m.qte, unite:m.unite, motif:null, note:'', source:'inventaire', auteur:S.user?S.user.uid:'local', version:VERSION}));
+    toast('Inventaire annulé');
+  },
+  exportChiffres(){
+    const cols = ['date','rayon','ventes_HT','achats_HT','casse_saisie','casse_systeme','casse_%_ventes','achats_%_ventes'];
+    const n = x => (x==null||x===''||!isFinite(x) ? '' : String(r2(x)).replace('.',','));
+    const lignes = S.chiffres.slice().sort((a,b)=> a.jour===b.jour ? 0 : (a.jour<b.jour?-1:1)).map(c => { const k = kpi(c.rayonId,c.jour,c.jour);
+      return [c.jour, (rayon(c.rayonId)||{nom:''}).nom, n(num(c.ventesHT)), n(num(c.achatsHT)), n(k.casse), n(num(c.casseSysteme)), k.ventes?n(k.casse/k.ventes*100):'', k.ventes&&k.achats?n(k.achats/k.ventes*100):'']; });
+    const csv = [cols, ...lignes].map(l => l.map(x => `"${String(x==null?'':x).replace(/"/g,'""')}"`).join(';')).join('\r\n');
+    telecharger(`stocks-chiffres-${iso(new Date())}.csv`, '﻿'+csv, 'text/csv;charset=utf-8');
+  },
   discret(v){ S.discret = typeof v==='boolean' ? v : !S.discret; ls.set('stocks-discret', S.discret); render(); },
   rafale(v){ S.rafale = v; ls.set('stocks-rafale', v); },
   scanQ(v){ S.scanQ = v; const q = v.trim().toLowerCase();
@@ -962,11 +1298,11 @@ window.A = {
   majMotif(i,k,v){ const p = clone(S.params); if (!p.motifs[i]) return; p.motifs[i][k] = k==='nom' ? (v.trim()||p.motifs[i].nom) : v; Store.params(p); },
   ajoutRayon(){ const n = prompt('Nom du rayon'); if (!n||!n.trim()) return; Store.put('rayons', {id:uid(), nom:n.trim(), ordre:S.rayons.length, transformation:false, tolerance:null, fonctionnement:'', actif:true}); },
   majRayon(id,k,v){ const r = rayon(id); if (!r) return; const x = clone(r);
-    if (k==='tolerance'){ const t = num(v); x.tolerance = isFinite(t) ? t : null; } else if (k==='nom'){ x.nom = v.trim()||x.nom; } else x[k] = v;
+    if (k==='tolerance' || k==='tauxMarque'){ const t = num(v); x[k] = isFinite(t) ? t : null; } else if (k==='nom'){ x.nom = v.trim()||x.nom; } else x[k] = v;
     Store.put('rayons', x); },
   ordreRayon(id,d){ const a = rayonsTries(true); const i = a.findIndex(r=>r.id===id); const j = i+d; if (j<0||j>=a.length) return;
     a.forEach((r,k)=>{ const o = k===i ? j : (k===j ? i : k); if (r.ordre!==o) Store.put('rayons', Object.assign(clone(r),{ordre:o})); }); },
-  exportJSON(){ telecharger(`stocks-${MAG}-${iso(new Date())}.json`, JSON.stringify({application:'stocks', version:VERSION, magasin:MAG, exporteLe:new Date().toISOString(), params:S.params, rayons:S.rayons, produits:S.produits, mouvements:S.mouvements}, null, 1), 'application/json'); },
+  exportJSON(){ telecharger(`stocks-${MAG}-${iso(new Date())}.json`, JSON.stringify({application:'stocks', version:VERSION, magasin:MAG, exporteLe:new Date().toISOString(), params:S.params, rayons:S.rayons, produits:S.produits, mouvements:S.mouvements, chiffres:S.chiffres, inventaires:S.inventaires}, null, 1), 'application/json'); },
   exportCSV(){
     const ann = annules();
     const cols = ['date','heure','type','produit','rayon','quantite','unite','motif','valeur_achat_HT','valeur_vente_TTC','annulee','note','code'];
@@ -982,9 +1318,9 @@ window.A = {
       try {
         const d = JSON.parse(r.result);
         if (d.application!=='stocks') throw new Error('format');
-        const n = {r:(d.rayons||[]).length, p:(d.produits||[]).length, m:(d.mouvements||[]).length};
-        if (!confirm(`Importer ${n.r} rayons, ${n.p} fiches et ${n.m} saisies ?`)) return;
-        (d.rayons||[]).forEach(x=>Store.put('rayons',x)); (d.produits||[]).forEach(x=>Store.put('produits',x)); (d.mouvements||[]).forEach(x=>Store.put('mouvements',x));
+        const n = {r:(d.rayons||[]).length, p:(d.produits||[]).length, m:(d.mouvements||[]).length, c:(d.chiffres||[]).length, i:(d.inventaires||[]).length};
+        if (!confirm(`Importer ${n.r} rayons, ${n.p} fiches, ${n.m} saisies, ${n.c} chiffres et ${n.i} inventaires ?`)) return;
+        ['rayons','produits','mouvements','chiffres','inventaires'].forEach(c => (d[c]||[]).forEach(x=>Store.put(c,x)));
         if (d.params) Store.params(deepMerge(DEF_PARAMS, d.params));
         toast('Import terminé');
       } catch(e){ toast('Ce fichier n’est pas un export de Stocks.'); }
@@ -1008,6 +1344,10 @@ window.A = {
    DÉMARRAGE
    ============================================================ */
 $('#veil').addEventListener('click', () => A.fermer());
+document.addEventListener('focusout', () => setTimeout(() => {
+  const a = document.activeElement;
+  if (S.aRedessiner && !(a && a.tagName==='INPUT' && $('#main') && $('#main').contains(a))) render();
+}, 120));
 window.addEventListener('online', () => { S.enLigne = true; majEntete(); });
 window.addEventListener('offline', () => { S.enLigne = false; majEntete(); });
 document.addEventListener('visibilitychange', () => { if (document.hidden && S.camOn) arreterCamera().then(()=>{ if (S.vue==='scanner') { S.camErr=''; } }); else if (!document.hidden && S.vue==='scanner' && !S.sheet) render(); });

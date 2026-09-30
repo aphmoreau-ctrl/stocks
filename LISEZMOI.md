@@ -1,8 +1,13 @@
-# Stocks, version 1.0.2
+# Stocks, version 1.1.0
 
 Application de justesse des stocks et de suivi de la démarque des rayons frais.
 
-## Ce que fait la V1
+## Ce que fait l'application
+
+- Tableau de bord quotidien (Accueil) : ventes, achats, casse et delta (démarque inconnue), en euros et en % des ventes, pour le magasin puis par rayon ; détail d'un rayon au toucher avec le calcul complet du delta entre deux inventaires et les 14 derniers jours.
+- Chiffres du jour : ventes HT, achats HT et casse déclarée dans le système, par rayon ; la casse constatée est calculée à partir des saisies.
+- Inventaire : resserre comptée et rayon estimé produit par produit (valorisés au prix d'achat, et reportés dans le stock de chaque produit), ou valeur globale ; les quantités en cours sont gardées sur l'appareil jusqu'à la validation.
+- Taux de marque théorique par rayon (Plus, Réglages, Rayons), indispensable au calcul du delta.
 
 - Scan des codes-barres (EAN, UPC, Code 128) avec la caméra de l'iPhone ou de l'iPad, et décodage des étiquettes à poids ou prix variable des balances (réglable).
 - Recherche par nom ou code PLU pour le vrac sans code-barres, et accès rapide aux produits les plus démarqués.
